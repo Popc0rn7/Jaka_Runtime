@@ -9,7 +9,7 @@ sys.path.append(root_dir)
 from hardware.ultrahands import *
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="client")
+@hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
 def main(cfg: DictConfig):
     client = UltrahandsClient(**cfg.client)
     client.start()

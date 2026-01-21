@@ -17,8 +17,12 @@ TOL = 20
 
 class JakaS5:
 
-    def __init__(self, ip: str):
+    def __init__(self, ip: str, freq_hz: int = 125):
         self.robot = jkrc.RC(ip)
+
+        # 设置运动控制频率
+        move_interval_ms = int(1000 / freq_hz)
+        self.step_num = max(1, move_interval_ms // 8)  # 每步8ms，至少1步
 
     def start(self):
         """
@@ -27,26 +31,25 @@ class JakaS5:
         self.robot.login()
         self.robot.power_on()
         self.robot.enable_robot()
+        self.robot.servo_move_enable(True)
 
-    def JointCtrl(self, joint_pos: list[float]):
+    def JointCtrl(self, joint_pos: list[float], step_num: int = 2):
         """
         关节运动控制 (MoveJ)
-        :param arm_id: 0 为左臂, 1 为右臂
         :param joint_pos: 7个关节的弧度列表
-        :param is_block: 是否阻塞等待运动完成
         """
-        self.robot.joint_move_extend(joint_pos, ABS, True, SPEED, ACC, TOL)
+        self.robot.servo_j(
+            joint_pos=joint_pos,
+            move_mode=0,  # 0:绝对位置
+            step_num=step_num,  # 在 step_num * 8ms 内到达目标位置
+        )
 
     def stop(self):
         """
         关闭机器人：下使能、下电、断开连接
         """
-        (failed,) = self.robot.disable_robot()
-        if failed:
-            print(f"下使能失败: {failed}")
-        (failed,) = self.robot.power_off()
-        if failed:
-            print(f"下电失败: {failed}")
+        self.robot.servo_move_enable(False)
+        self.robot.disable_robot()
 
     def get_joint_position(self):
         """
@@ -54,5 +57,3 @@ class JakaS5:
         """
         ret = self.robot.get_joint_position()
         return ret[1]
-    
-    
