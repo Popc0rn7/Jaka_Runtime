@@ -1,0 +1,4 @@
+[submodule "hardware/ultrahands"]
+	path = hardware/ultrahands
+	url = https://ipads.se.sjtu.edu.cn:1312/robot-sig/joycan_sdk.git
+	branch = main
