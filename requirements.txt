@@ -1,1 +1,4 @@
 -e ./hardware/ultrahands
+-e ./hardware/joycan
+
+hydra-core

@@ -1,2 +1,12 @@
+# IDE
 .vscode
+
+# Python
+__pycache__/
+
+# venv
+venv/
+.venv/
+
+# log
 outputs
