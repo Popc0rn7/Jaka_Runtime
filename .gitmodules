@@ -1,8 +1,3 @@
-[submodule "hardware/joycan"]
-	path = hardware/joycan
-	url = https://ipads.se.sjtu.edu.cn:1312/robot-sig/joycan_sdk.git
-	branch = main
-
 [submodule "hardware/ultrahands"]
 	path = hardware/ultrahands
 	url = https://ipads.se.sjtu.edu.cn:1312/robot-sig/ultrahands_sdk.git
