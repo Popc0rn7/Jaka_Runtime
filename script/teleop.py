@@ -22,7 +22,6 @@ def main(cfg: DictConfig):
 
     # 启动gripper
     gripper = AG95(port='/dev/ttyUSB1')
-    gripper.set_pos(0) # 初始状态为闭合
 
     # 初始化 Ultrahands Client
     ultrahands = UltrahandsClient(**cfg.client)
@@ -30,12 +29,13 @@ def main(cfg: DictConfig):
 
     # main loop
     while True:
+        gripper.set_pos(0) # 夹爪初始状态为闭合
         ramp_to_ultrahands(arm, ultrahands)  # 缓慢移动到 Ultrahands 位置
         teleop(arm, gripper, ultrahands)  # 进入遥操作循环
 
 
 def ramp_to_ultrahands(arm: JakaS5, ultrahands: UltrahandsClient):
-    print("press X to start ramping to ultrahands position...")
+    print("press X to start ramping to ultrahands position in 2 seconds...", end="", flush=True)
     last_x = False
     while True:
         x_pressed = bool(ultrahands.input_report.btn_x)
@@ -44,8 +44,6 @@ def ramp_to_ultrahands(arm: JakaS5, ultrahands: UltrahandsClient):
         last_x = x_pressed
         time.sleep(0.01)
 
-    print("arm will move to ultrahands position in 2 seconds...")
-    print("don't move ultrahands during this period.")
     time.sleep(1.0)
     angles = ultrahands.input_report.angles
     arm.JointCtrl(angles[:7], step_num=250)  # 2 seconds
@@ -67,7 +65,7 @@ def record_angles(path: str, angles):
 
 
 def teleop(arm: JakaS5, gripper: AG95, ultrahands: UltrahandsClient):
-    print("teleop started, press Y to stop.")
+    print("teleop started, press Y to stop...", end="", flush=True)
 
     # frequency config
     dt = 1.0 / 30.0
@@ -104,7 +102,7 @@ def teleop(arm: JakaS5, gripper: AG95, ultrahands: UltrahandsClient):
         # check stop condition
         y_pressed = bool(report.btn_y)
         if y_pressed and not last_y:
-            print("Y pressed, stopping teleop.")
+            print("done.")
             break
         last_y = y_pressed
 
