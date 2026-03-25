@@ -1,3 +1,4 @@
 -e ./hardware/ultrahands
 
 hydra-core
+pydhgripper
