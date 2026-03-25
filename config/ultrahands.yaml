@@ -1,5 +1,5 @@
 client:
-  host: "192.168.2.123" 
+  host: "192.168.2.110" 
   port: 5678
   timeout: 1.0
   angle_num: 6

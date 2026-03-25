@@ -3,6 +3,7 @@ import sys
 import csv
 import time
 import hydra
+from pathlib import Path
 from omegaconf import DictConfig
 
 # import modules from the root directory
@@ -32,7 +33,7 @@ def ramp_to_ultrahands(robot: JakaS5, ultrahands: UltrahandsClient):
     print("press X to start ramping to ultrahands position...")
     last_x = False
     while True:
-        x_pressed = bool(ultrahands.input_report.x)
+        x_pressed = bool(ultrahands.input_report.btn_x)
         if x_pressed and not last_x:
             break
         last_x = x_pressed
@@ -63,29 +64,40 @@ def record_angles(path: str, angles):
 def teleop(robot: JakaS5, ultrahands: UltrahandsClient):
     print("teleop started, press Y to stop.")
 
-    # record config
-    timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    record_path = os.path.join(root_dir, "logs", f"angles_{timestamp}.csv")
-
     # frequency config
     dt = 1.0 / 30.0
     next_tick = time.perf_counter()
 
+    # record config
+    timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    record_path = Path(root_dir) / "outputs" / f"angles_{timestamp}.csv"
+
+    # gripper state
+    gripper_open = False
+
     # teleop loop
     last_y = False
+    last_rb = False
     while True:
         next_tick += dt
         report = ultrahands.input_report
 
-        # robot control
+        # arm control
         angles = report.angles
         if angles is not None:
-            record_angles(record_path, angles)
+            record_angles(str(record_path), angles)
             joint_pos = angles[:7]
             robot.JointCtrl(joint_pos, 2)
 
+        # gripper control
+        rb_pressed = bool(report.btn_rb)
+        if rb_pressed and not last_rb:
+            gripper_open = not gripper_open
+            robot.set_gripper(gripper_open)
+        last_rb = rb_pressed
+
         # check stop condition
-        y_pressed = bool(report.y)
+        y_pressed = bool(report.btn_y)
         if y_pressed and not last_y:
             print("Y pressed, stopping teleop.")
             break
