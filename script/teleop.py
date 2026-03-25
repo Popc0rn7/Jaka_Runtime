@@ -1,5 +1,6 @@
 import os
 import sys
+import csv
 import time
 import hydra
 from omegaconf import DictConfig
@@ -34,18 +35,41 @@ def ramp_to_ultrahands(robot: JakaS5, ultrahands: UltrahandsClient):
     print("done.")
 
 
+def record_angles(path: str, angles):
+    if angles is None:
+        return
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    file_exists = os.path.exists(path)
+
+    with open(path, "a", newline="") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["timestamp"] + [f"joint_{i}" for i in range(len(angles))])
+        writer.writerow([time.time()] + list(angles))
+
+
 def teleop(robot: JakaS5, ultrahands: UltrahandsClient):
     print("teleop started")
+
+    # record config
+    timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    record_path = os.path.join(root_dir, "logs", f"angles_{timestamp}.csv")
+
+    # frequency config
     dt = 1.0 / 30.0
     next_tick = time.perf_counter()
+
+    # main loop
     while True:
         next_tick += dt
         angles = ultrahands.input_report.angles
         if angles is not None:
+            record_angles(record_path, angles)
             joint_pos = angles[:7]
             robot.JointCtrl(joint_pos, 2)
 
-        # 频率控制
+        # frequency control
         sleep_s = next_tick - time.perf_counter()
         if sleep_s > 0:
             time.sleep(sleep_s)
