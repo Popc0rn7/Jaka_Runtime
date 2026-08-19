@@ -13,6 +13,7 @@ NONBLOCK = False
 SPEED = 1
 ACC = 1
 TOL = 20
+JOINT_COUNT = 6
 
 
 class JakaS5:
@@ -36,8 +37,13 @@ class JakaS5:
     def JointCtrl(self, joint_pos: list[float], step_num: int = 2):
         """
         关节运动控制 (MoveJ)
-        :param joint_pos: 7个关节的弧度列表
+        :param joint_pos: 6个关节的弧度列表（JAKA S5 为六轴机器人）
         """
+        if len(joint_pos) != JOINT_COUNT:
+            raise ValueError(
+                f"JAKA S5 requires {JOINT_COUNT} joint positions, "
+                f"got {len(joint_pos)}"
+            )
         self.robot.servo_j(
             joint_pos=joint_pos,
             move_mode=0,  # 0:绝对位置

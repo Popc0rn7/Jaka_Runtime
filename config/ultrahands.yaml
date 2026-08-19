@@ -4,3 +4,12 @@ client:
   timeout: 1.0
   angle_num: 6
   frame_header: aa555aa569
+
+gripper:
+  port: "/dev/ttyUSB0"
+  force: 50
+  velocity: 50
+
+replay:
+  dataset_root: "data/demo/20260819_145248"
+  confirm: false
