@@ -16,27 +16,33 @@ from hardware.ultrahands import UltrahandsClient
 from hardware.zed import ZedCamera
 from src.data_collector import LeRobotDataCollector
 
-IMAGE_SHAPE = (640, 480, 3)  # HWC
 
-
-def load_static_rgb_image(path: Path, size: int = IMAGE_SHAPE[0]) -> np.ndarray:
-    """Center-crop an image to a square and resize it for a virtual camera."""
+def load_static_rgb_image(path: Path, width: int, height: int) -> np.ndarray:
+    """Center-crop to the target aspect ratio, then resize to camera shape."""
     if not path.is_file():
         raise FileNotFoundError(f"Static camera image not found: {path}")
 
     with Image.open(path) as image:
         image = image.convert("RGB")
-        width, height = image.size
-        crop_size = min(width, height)
-        left = (width - crop_size) // 2
-        top = (height - crop_size) // 2
-        image = image.crop((left, top, left + crop_size, top + crop_size))
-        image = image.resize((size, size), Image.Resampling.LANCZOS)
+        source_width, source_height = image.size
+        target_ratio = width / height
+        source_ratio = source_width / source_height
+        if source_ratio > target_ratio:
+            crop_width = round(source_height * target_ratio)
+            left = (source_width - crop_width) // 2
+            image = image.crop((left, 0, left + crop_width, source_height))
+        elif source_ratio < target_ratio:
+            crop_height = round(source_width / target_ratio)
+            top = (source_height - crop_height) // 2
+            image = image.crop((0, top, source_width, top + crop_height))
+        image = image.resize((width, height), Image.Resampling.LANCZOS)
         return np.asarray(image, dtype=np.uint8)
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
 def main(cfg: DictConfig):
+    image_shape = (int(cfg.zed.output_width), int(cfg.zed.output_height), 3)  # HWC
+
     # 启动arm
     arm = JakaS5(ip="192.168.2.121", freq_hz=30)
     arm.start()
@@ -64,7 +70,7 @@ def main(cfg: DictConfig):
         state_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
         action_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
         task="Just a Demo",
-        camera_shapes={"wrist": IMAGE_SHAPE, "agent_view": IMAGE_SHAPE},
+        camera_shapes={"wrist": image_shape, "agent_view": image_shape},
     )
 
     # Each press of the teleop stop control saves one LeRobot episode.
@@ -72,7 +78,7 @@ def main(cfg: DictConfig):
         gripper.set_pos(0)  # 夹爪初始状态为闭合
         ramp_to_ultrahands(arm, ultrahands)  # 缓慢移动到 Ultrahands 位置
         try:
-            teleop(arm, gripper, ultrahands, zed_camera, collector)
+            teleop(arm, gripper, ultrahands, zed_camera, collector, image_shape)
         except KeyboardInterrupt:
             print("\nteleop interrupted.")
         finally:
@@ -114,10 +120,13 @@ def teleop(
     ultrahands: UltrahandsClient,
     zed_camera: ZedCamera,
     collector: LeRobotDataCollector,
+    image_shape: tuple[int, int, int],
 ):
     print("teleop started, press Y to stop...", end="", flush=True)
 
-    static_image = load_static_rgb_image(Path(root_dir) / "data" / "dog.jpg")
+    static_image = load_static_rgb_image(
+        Path(root_dir) / "data" / "dog.jpg", image_shape[0], image_shape[1]
+    )
 
     # frequency config
     dt = 1.0 / 30.0
@@ -148,13 +157,13 @@ def teleop(
             gripper.set_pos(int(gripper_target * 1000))
         last_rb = rb_pressed
 
-        # Fetch the latest RGB frame from the background camera thread (non-blocking).
+        # capture images
         agent_view_image = zed_camera.read()
+
         # collect data
         joint_state = arm.get_joint_position()
         # gripper_state = gripper.read_pos() / 1000.0  # sleep(0.08), may block
         gripper_state = gripper_target
-        print(f"joint_state: {joint_state}\n")
         if joint_state is None or len(joint_state) < JOINT_COUNT:
             raise RuntimeError("No JAKA joint feedback received")
         collector.record_step(

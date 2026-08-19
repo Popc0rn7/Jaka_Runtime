@@ -193,6 +193,19 @@ class ZedCamera:
             )
 
         if self.output_width is not None and self.output_height is not None:
+            # Crop excess area to the requested aspect ratio before resizing;
+            # direct resizing would distort the camera image.
+            frame_height, frame_width = frame_bgr.shape[:2]
+            target_ratio = self.output_width / self.output_height
+            source_ratio = frame_width / frame_height
+            if source_ratio > target_ratio:
+                crop_width = round(frame_height * target_ratio)
+                left = (frame_width - crop_width) // 2
+                frame_bgr = frame_bgr[:, left : left + crop_width]
+            elif source_ratio < target_ratio:
+                crop_height = round(frame_width / target_ratio)
+                top = (frame_height - crop_height) // 2
+                frame_bgr = frame_bgr[top : top + crop_height, :]
             frame_bgr = cv2.resize(
                 frame_bgr,
                 (self.output_width, self.output_height),
