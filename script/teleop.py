@@ -13,9 +13,10 @@ root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(root_dir)
 from hardware.jaka_s5 import JOINT_COUNT, JakaS5
 from hardware.ultrahands import UltrahandsClient
+from hardware.zed import ZedCamera
 from src.data_collector import LeRobotDataCollector
 
-IMAGE_SHAPE = (224, 224, 3)  # HWC
+IMAGE_SHAPE = (640, 480, 3)  # HWC
 
 
 def load_static_rgb_image(path: Path, size: int = IMAGE_SHAPE[0]) -> np.ndarray:
@@ -49,6 +50,10 @@ def main(cfg: DictConfig):
     ultrahands = UltrahandsClient(**cfg.client)
     ultrahands.start()
 
+    # 初始化 Zed Camera
+    zed_camera = ZedCamera(**cfg.zed)
+    zed_camera.start()
+
     # 初始化数据采集器。一个运行目录可保存多个 teleop episode。
     timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     data_path = Path(root_dir) / "data" / "demo" / timestamp
@@ -59,7 +64,7 @@ def main(cfg: DictConfig):
         state_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
         action_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
         task="Just a Demo",
-        camera_shapes={"wrist": IMAGE_SHAPE},
+        camera_shapes={"wrist": IMAGE_SHAPE, "agent_view": IMAGE_SHAPE},
     )
 
     # Each press of the teleop stop control saves one LeRobot episode.
@@ -67,7 +72,7 @@ def main(cfg: DictConfig):
         gripper.set_pos(0)  # 夹爪初始状态为闭合
         ramp_to_ultrahands(arm, ultrahands)  # 缓慢移动到 Ultrahands 位置
         try:
-            teleop(arm, gripper, ultrahands, collector)
+            teleop(arm, gripper, ultrahands, zed_camera, collector)
         except KeyboardInterrupt:
             print("\nteleop interrupted.")
         finally:
@@ -77,6 +82,7 @@ def main(cfg: DictConfig):
             collector.finalize()
             ultrahands.stop()
             arm.stop()
+            zed_camera.stop()
             break
 
 
@@ -106,6 +112,7 @@ def teleop(
     arm: JakaS5,
     gripper: AG95,
     ultrahands: UltrahandsClient,
+    zed_camera: ZedCamera,
     collector: LeRobotDataCollector,
 ):
     print("teleop started, press Y to stop...", end="", flush=True)
@@ -141,9 +148,11 @@ def teleop(
             gripper.set_pos(int(gripper_target * 1000))
         last_rb = rb_pressed
 
-        # save data
+        # Fetch the latest RGB frame from the background camera thread (non-blocking).
+        agent_view_image = zed_camera.read()
+        # collect data
         joint_state = arm.get_joint_position()
-        # gripper_state = gripper.read_pos() / 1000.0  # normalize to [0, 1]
+        # gripper_state = gripper.read_pos() / 1000.0  # sleep(0.08), may block
         gripper_state = gripper_target
         print(f"joint_state: {joint_state}\n")
         if joint_state is None or len(joint_state) < JOINT_COUNT:
@@ -157,7 +166,7 @@ def teleop(
                 *angles[:JOINT_COUNT],
                 gripper_target,
             ],
-            images={"wrist": static_image},
+            images={"wrist": static_image, "agent_view": agent_view_image},
         )
 
         # check stop condition

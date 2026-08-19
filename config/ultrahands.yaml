@@ -10,6 +10,19 @@ gripper:
   force: 50
   velocity: 50
 
+# ZED 2i UVC/V4L2 RGB source. The 376p UVC stream is 1344x376 side-by-side;
+# the driver crops the selected eye and returns 224x224 uint8 RGB for LeRobot.
+zed:
+  device: "/dev/video4"
+  width: 1344
+  height: 376
+  fps: 60
+  fourcc: ""
+  eye: "left"
+  output_width: 640
+  output_height: 480
+  startup_timeout: 3.0
+
 replay:
   dataset_root: "data/demo/20260819_145248"
   confirm: false
