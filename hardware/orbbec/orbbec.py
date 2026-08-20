@@ -56,8 +56,9 @@ class OrbbecCamera:
             ``output_height``.
         output_height: Optional RGB output height. Must be paired with
             ``output_width``.
-        startup_timeout: Seconds :meth:`start` waits for the color stream to
-            reach its nominal frame rate. Allow at least ~3s for a cold start.
+        rotate_180: Rotate the color image by 180 degrees before it is
+            returned. Use this when the camera is mounted upside down.
+        startup_timeout: Seconds :meth:`start` waits for the first color frame.
     """
 
     def __init__(
@@ -69,7 +70,8 @@ class OrbbecCamera:
         color_format: str = "",
         output_width: int | None = None,
         output_height: int | None = None,
-        startup_timeout: float = 5.0,
+        rotate_180: bool = False,
+        startup_timeout: float = 3.0,
     ) -> None:
         if width <= 0 or height <= 0 or fps <= 0:
             raise ValueError("width, height, and fps must be positive")
@@ -93,6 +95,7 @@ class OrbbecCamera:
         self.color_format = color_format
         self.output_width = output_width
         self.output_height = output_height
+        self.rotate_180 = rotate_180
         self.startup_timeout = startup_timeout
         self._cv2 = None
         self._np = None
@@ -195,7 +198,9 @@ class OrbbecCamera:
             has_frame = self._latest_frame is not None
         if worker_error is not None or not has_frame:
             self.stop()
-            detail = str(worker_error) if worker_error is not None else "no frame received"
+            detail = (
+                str(worker_error) if worker_error is not None else "no frame received"
+            )
             raise RuntimeError(f"Could not start the Orbbec camera: {detail}")
 
     def read(self) -> np.ndarray:
@@ -207,7 +212,9 @@ class OrbbecCamera:
             frame_rgb = self._latest_frame
             worker_error = self._worker_error
         if worker_error is not None:
-            raise RuntimeError(f"Camera capture stopped: {worker_error}") from worker_error
+            raise RuntimeError(
+                f"Camera capture stopped: {worker_error}"
+            ) from worker_error
         if frame_rgb is None:
             raise RuntimeError("No camera frame is available")
         # The worker replaces this array reference for every frame and never
@@ -246,7 +253,9 @@ class OrbbecCamera:
             # Unblock start() instead of making it wait out the full timeout.
             self._stream_ready.set()
 
-    def _prepare_frame(self, color_frame: object, cv2: object, np: object) -> np.ndarray:
+    def _prepare_frame(
+        self, color_frame: object, cv2: object, np: object
+    ) -> np.ndarray:
         """Decode, optionally resize, and return one RGB color frame."""
         width = color_frame.get_width()
         height = color_frame.get_height()
@@ -259,7 +268,9 @@ class OrbbecCamera:
                 raise RuntimeError("Failed to decode an MJPG color frame")
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         elif format_name == "YUYV":
-            frame_rgb = cv2.cvtColor(data.reshape(height, width, 2), cv2.COLOR_YUV2RGB_YUYV)
+            frame_rgb = cv2.cvtColor(
+                data.reshape(height, width, 2), cv2.COLOR_YUV2RGB_YUYV
+            )
         elif format_name == "RGB":
             frame_rgb = data.reshape(height, width, 3)
         elif format_name == "BGR":
@@ -269,6 +280,11 @@ class OrbbecCamera:
                 f"Unsupported color format {format_name}; set color_format to one of "
                 f"{SUPPORTED_COLOR_FORMATS}"
             )
+
+        # Camera orientation belongs at the driver boundary so that previews
+        # and recorded observations use the same canonical wrist-camera view.
+        if self.rotate_180:
+            frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
 
         if self.output_width is None or self.output_height is None:
             return frame_rgb

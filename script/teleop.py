@@ -16,6 +16,7 @@ from hardware.ultrahands import UltrahandsClient
 from hardware.zed import ZedCamera
 from hardware.orbbec import OrbbecCamera
 from src.data_collector import LeRobotDataCollector
+from src.teleop_display import DualCameraDisplay
 
 
 def load_static_rgb_image(path: Path, height: int, width: int) -> np.ndarray:
@@ -83,6 +84,9 @@ def main(cfg: DictConfig):
         camera_shapes={"wrist": wrist_shape, "agent_view": agent_view_shape},
     )
 
+    display = DualCameraDisplay(**cfg.display)
+    display.start()
+
     episode_count = 0
     try:
         # Keep devices and the dataset open for the whole collection session.
@@ -90,16 +94,25 @@ def main(cfg: DictConfig):
         while True:
             gripper.set_pos(0)  # 夹爪初始状态为闭合
             ramp_to_ultrahands(arm, ultrahands)  # 缓慢移动到 Ultrahands 位置
-            teleop(arm, gripper, ultrahands, agent_view_camera, wrist_camera, collector)
+            teleop(
+                arm,
+                gripper,
+                ultrahands,
+                agent_view_camera,
+                wrist_camera,
+                collector,
+                display,
+            )
             episode_count += 1
             print(f"Episode {episode_count} saved. Ready for the next episode.")
     except KeyboardInterrupt:
-        print("\nCollection interrupted.")
+        print("Collection interrupted.")
     finally:
         # Never leave an incomplete episode in the LeRobot dataset.
         if collector.dataset.has_pending_frames():
             collector.discard_episode()
         collector.finalize()
+        display.stop()
         ultrahands.stop()
         arm.stop()
         wrist_camera.stop()
@@ -136,6 +149,7 @@ def teleop(
     agent_view_camera: ZedCamera,
     wrist_camera: OrbbecCamera,
     collector: LeRobotDataCollector,
+    display: DualCameraDisplay,
 ):
     print("teleop started, press Y to stop...", end="", flush=True)
 
@@ -191,6 +205,10 @@ def teleop(
             ],
             images={"wrist": wrist_image, "agent_view": agent_view_image},
         )
+        # Publish the same frames sent to the data collector, so preview and
+        # recorded observations refer to the exact same teleop tick. This is a
+        # no-op when display.enabled is false.
+        display.publish({"wrist": wrist_image, "agent_view": agent_view_image})
 
         # check stop condition
         y_pressed = bool(report.stick_l1_horizontal)

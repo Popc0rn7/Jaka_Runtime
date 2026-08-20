@@ -1,5 +1,5 @@
 client:
-  host: "192.168.2.116"
+  host: "192.168.2.108" 
   port: 5678
   timeout: 1.0
   angle_num: 6
@@ -13,7 +13,7 @@ gripper:
 # ZED 2i UVC/V4L2 RGB source. Width is the complete side-by-side frame;
 # the driver crops the selected eye and returns the configured uint8 RGB size.
 zed:
-  device: "/dev/video4"
+  device: "/dev/video0"
   width: 2560
   height: 720
   fps: 30
@@ -36,7 +36,18 @@ orbbec:
   color_format: ""       # empty keeps the device default (MJPG on the 336L)
   output_width: 640
   output_height: 480
-  startup_timeout: 5.0   # a cold start needs ~3s to reach a stable 30fps
+  # The wrist camera is physically installed upside down on this robot.
+  rotate_180: true
+  startup_timeout: 3.0
+
+# Web preview for headless collection hosts. Keep this on localhost and use an
+# SSH tunnel from the operator's workstation; the stream has no authentication.
+display:
+  enabled: true
+  host: "127.0.0.1"
+  port: 8765
+  fps: 30
+  jpeg_quality: 80
 
 replay:
   dataset_root: "data/demo/20260819_145248"
