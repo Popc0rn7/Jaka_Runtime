@@ -1,5 +1,5 @@
 client:
-  host: "192.168.2.110" 
+  host: "192.168.2.116"
   port: 5678
   timeout: 1.0
   angle_num: 6
@@ -10,13 +10,13 @@ gripper:
   force: 50
   velocity: 50
 
-# ZED 2i UVC/V4L2 RGB source. The 376p UVC stream is 1344x376 side-by-side;
-# the driver crops the selected eye and returns 224x224 uint8 RGB for LeRobot.
+# ZED 2i UVC/V4L2 RGB source. Width is the complete side-by-side frame;
+# the driver crops the selected eye and returns the configured uint8 RGB size.
 zed:
   device: "/dev/video4"
-  width: 1344
-  height: 376
-  fps: 60
+  width: 2560
+  height: 720
+  fps: 30
   fourcc: ""
   eye: "left"
   output_width: 640
@@ -27,11 +27,15 @@ zed:
 # 1280x720; cropping/downscaling to the 640x360 training size belongs to dataset
 # export, so the driver itself never resizes.
 orbbec:
+  # Leave empty to select the first connected Orbbec device.
   serial_number: ""      # empty picks the first camera found
   width: 1280
   height: 720
   fps: 30
+  # Leave empty to let the SDK choose a compatible profile format.
   color_format: ""       # empty keeps the device default (MJPG on the 336L)
+  output_width: 640
+  output_height: 480
   startup_timeout: 5.0   # a cold start needs ~3s to reach a stable 30fps
 
 replay:

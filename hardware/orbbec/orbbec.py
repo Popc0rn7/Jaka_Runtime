@@ -41,9 +41,9 @@ class OrbbecCamera:
     ``read()`` returns an HWC, ``uint8`` RGB array, ready for
     :class:`src.data_collector.LeRobotDataCollector`.
 
-    Frames are returned at the native capture resolution. Each camera records
-    its own stream as-is; cropping and downscaling to the training resolution
-    belong to dataset export, not to this driver.
+    When ``output_width`` and ``output_height`` are set, frames are center-
+    cropped to the requested aspect ratio and resized before being returned.
+    Otherwise, frames are returned at the native capture resolution.
 
     Args:
         serial_number: Select a specific camera; empty picks the first one found.
@@ -52,6 +52,10 @@ class OrbbecCamera:
         fps: Requested color frame rate.
         color_format: Requested pixel format, one of
             :data:`SUPPORTED_COLOR_FORMATS`; empty keeps the device default.
+        output_width: Optional RGB output width. Must be paired with
+            ``output_height``.
+        output_height: Optional RGB output height. Must be paired with
+            ``output_width``.
         startup_timeout: Seconds :meth:`start` waits for the color stream to
             reach its nominal frame rate. Allow at least ~3s for a cold start.
     """
@@ -63,6 +67,8 @@ class OrbbecCamera:
         height: int = 720,
         fps: int = 30,
         color_format: str = "",
+        output_width: int | None = None,
+        output_height: int | None = None,
         startup_timeout: float = 5.0,
     ) -> None:
         if width <= 0 or height <= 0 or fps <= 0:
@@ -71,6 +77,12 @@ class OrbbecCamera:
             raise ValueError(
                 f"color_format must be empty or one of {SUPPORTED_COLOR_FORMATS}, got {color_format!r}"
             )
+        if bool(output_width) != bool(output_height):
+            raise ValueError("output_width and output_height must be provided together")
+        if output_width is not None and (
+            output_width <= 0 or output_height is None or output_height <= 0
+        ):
+            raise ValueError("output_width and output_height must be positive")
         if startup_timeout <= 0:
             raise ValueError("startup_timeout must be positive")
 
@@ -79,6 +91,8 @@ class OrbbecCamera:
         self.height = height
         self.fps = fps
         self.color_format = color_format
+        self.output_width = output_width
+        self.output_height = output_height
         self.startup_timeout = startup_timeout
         self._cv2 = None
         self._np = None
@@ -233,7 +247,7 @@ class OrbbecCamera:
             self._stream_ready.set()
 
     def _prepare_frame(self, color_frame: object, cv2: object, np: object) -> np.ndarray:
-        """Decode one color frame to an RGB array at its native resolution."""
+        """Decode, optionally resize, and return one RGB color frame."""
         width = color_frame.get_width()
         height = color_frame.get_height()
         format_name = color_frame.get_format().name
@@ -243,16 +257,37 @@ class OrbbecCamera:
             frame_bgr = cv2.imdecode(data, cv2.IMREAD_COLOR)
             if frame_bgr is None:
                 raise RuntimeError("Failed to decode an MJPG color frame")
-            return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        if format_name == "YUYV":
-            return cv2.cvtColor(data.reshape(height, width, 2), cv2.COLOR_YUV2RGB_YUYV)
-        if format_name == "RGB":
-            return data.reshape(height, width, 3)
-        if format_name == "BGR":
-            return cv2.cvtColor(data.reshape(height, width, 3), cv2.COLOR_BGR2RGB)
-        raise RuntimeError(
-            f"Unsupported color format {format_name}; set color_format to one of "
-            f"{SUPPORTED_COLOR_FORMATS}"
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        elif format_name == "YUYV":
+            frame_rgb = cv2.cvtColor(data.reshape(height, width, 2), cv2.COLOR_YUV2RGB_YUYV)
+        elif format_name == "RGB":
+            frame_rgb = data.reshape(height, width, 3)
+        elif format_name == "BGR":
+            frame_rgb = cv2.cvtColor(data.reshape(height, width, 3), cv2.COLOR_BGR2RGB)
+        else:
+            raise RuntimeError(
+                f"Unsupported color format {format_name}; set color_format to one of "
+                f"{SUPPORTED_COLOR_FORMATS}"
+            )
+
+        if self.output_width is None or self.output_height is None:
+            return frame_rgb
+
+        frame_height, frame_width = frame_rgb.shape[:2]
+        target_ratio = self.output_width / self.output_height
+        source_ratio = frame_width / frame_height
+        if source_ratio > target_ratio:
+            crop_width = round(frame_height * target_ratio)
+            left = (frame_width - crop_width) // 2
+            frame_rgb = frame_rgb[:, left : left + crop_width]
+        elif source_ratio < target_ratio:
+            crop_height = round(frame_width / target_ratio)
+            top = (frame_height - crop_height) // 2
+            frame_rgb = frame_rgb[top : top + crop_height, :]
+        return cv2.resize(
+            frame_rgb,
+            (self.output_width, self.output_height),
+            interpolation=cv2.INTER_AREA,
         )
 
     def stop(self) -> None:
