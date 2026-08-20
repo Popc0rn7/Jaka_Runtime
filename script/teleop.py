@@ -17,7 +17,7 @@ from hardware.zed import ZedCamera
 from src.data_collector import LeRobotDataCollector
 
 
-def load_static_rgb_image(path: Path, width: int, height: int) -> np.ndarray:
+def load_static_rgb_image(path: Path, height: int, width: int) -> np.ndarray:
     """Center-crop to the target aspect ratio, then resize to camera shape."""
     if not path.is_file():
         raise FileNotFoundError(f"Static camera image not found: {path}")
@@ -41,7 +41,7 @@ def load_static_rgb_image(path: Path, width: int, height: int) -> np.ndarray:
 
 @hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
 def main(cfg: DictConfig):
-    image_shape = (int(cfg.zed.output_width), int(cfg.zed.output_height), 3)  # HWC
+    image_shape = (int(cfg.zed.output_height), int(cfg.zed.output_width), 3)  # HWC
 
     # 启动arm
     arm = JakaS5(ip="192.168.2.121", freq_hz=30)
@@ -73,23 +73,26 @@ def main(cfg: DictConfig):
         camera_shapes={"wrist": image_shape, "agent_view": image_shape},
     )
 
-    # Each press of the teleop stop control saves one LeRobot episode.
-    while True:
-        gripper.set_pos(0)  # 夹爪初始状态为闭合
-        ramp_to_ultrahands(arm, ultrahands)  # 缓慢移动到 Ultrahands 位置
-        try:
+    episode_count = 0
+    try:
+        # Keep devices and the dataset open for the whole collection session.
+        # Completing an episode returns here and prepares the next one.
+        while True:
+            gripper.set_pos(0)  # 夹爪初始状态为闭合
+            ramp_to_ultrahands(arm, ultrahands)  # 缓慢移动到 Ultrahands 位置
             teleop(arm, gripper, ultrahands, zed_camera, collector, image_shape)
-        except KeyboardInterrupt:
-            print("\nteleop interrupted.")
-        finally:
-            # Never leave an incomplete episode in the LeRobot dataset.
-            if collector.dataset.has_pending_frames():
-                collector.discard_episode()
-            collector.finalize()
-            ultrahands.stop()
-            arm.stop()
-            zed_camera.stop()
-            break
+            episode_count += 1
+            print(f"Episode {episode_count} saved. Ready for the next episode.")
+    except KeyboardInterrupt:
+        print("\nCollection interrupted.")
+    finally:
+        # Never leave an incomplete episode in the LeRobot dataset.
+        if collector.dataset.has_pending_frames():
+            collector.discard_episode()
+        collector.finalize()
+        ultrahands.stop()
+        arm.stop()
+        zed_camera.stop()
 
 
 def ramp_to_ultrahands(arm: JakaS5, ultrahands: UltrahandsClient):
@@ -98,7 +101,8 @@ def ramp_to_ultrahands(arm: JakaS5, ultrahands: UltrahandsClient):
         end="",
         flush=True,
     )
-    last_x = False
+    # Require a fresh press for every episode start.
+    last_x = bool(ultrahands.input_report.stick_l1_vertical)
     while True:
         x_pressed = bool(ultrahands.input_report.stick_l1_vertical)
         if x_pressed and not last_x:
@@ -137,8 +141,10 @@ def teleop(
     gripper_target = 0.0
 
     # teleop loop
-    last_y = False
-    last_rb = False
+    # Ignore controls held while transitioning from the previous episode.
+    initial_report = ultrahands.input_report
+    last_y = bool(initial_report.stick_l1_horizontal)
+    last_rb = bool(initial_report.stick_l2_vertical)
     while True:
         next_tick += dt
         report = ultrahands.input_report
@@ -188,6 +194,7 @@ def teleop(
 
         # frequency control
         sleep_s = next_tick - time.perf_counter()
+        # print(f"Total:{sleep_s}ms")
         if sleep_s > 0:
             time.sleep(sleep_s)
         else:
