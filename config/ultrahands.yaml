@@ -20,7 +20,21 @@ zed:
   fourcc: ""
   eye: "left"
   output_width: 640
-  output_height: 360
+  output_height: 480
+  startup_timeout: 3.0
+
+# Orbbec Gemini RGB source. Width and height are the native color-stream
+# resolution requested from the SDK. Output dimensions constrain read() frames.
+orbbec:
+  # Leave empty to select the first connected Orbbec device.
+  serial_number: ""
+  width: 1280
+  height: 720
+  fps: 30
+  # Leave empty to let the SDK choose a compatible profile format.
+  color_format: ""
+  output_width: 640
+  output_height: 480
   startup_timeout: 3.0
 
 replay:

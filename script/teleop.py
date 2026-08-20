@@ -14,6 +14,7 @@ sys.path.append(root_dir)
 from hardware.jaka_s5 import JOINT_COUNT, JakaS5
 from hardware.ultrahands import UltrahandsClient
 from hardware.zed import ZedCamera
+from hardware.orbbec import OrbbecCamera
 from src.data_collector import LeRobotDataCollector
 
 
@@ -41,7 +42,20 @@ def load_static_rgb_image(path: Path, height: int, width: int) -> np.ndarray:
 
 @hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
 def main(cfg: DictConfig):
-    image_shape = (int(cfg.zed.output_height), int(cfg.zed.output_width), 3)  # HWC
+    agent_view_shape = (int(cfg.zed.output_height), int(cfg.zed.output_width), 3)  # HWC
+    wrist_shape = (
+        int(cfg.orbbec.output_height),
+        int(cfg.orbbec.output_width),
+        3,
+    )  # HWC
+
+    # 初始化 Orbbec Camera
+    wrist_camera = OrbbecCamera(**cfg.orbbec)
+    wrist_camera.start()
+
+    # 初始化 Zed Camera
+    agent_view_camera = ZedCamera(**cfg.zed)
+    agent_view_camera.start()
 
     # 启动arm
     arm = JakaS5(ip="192.168.2.121", freq_hz=30)
@@ -56,21 +70,17 @@ def main(cfg: DictConfig):
     ultrahands = UltrahandsClient(**cfg.client)
     ultrahands.start()
 
-    # 初始化 Zed Camera
-    zed_camera = ZedCamera(**cfg.zed)
-    zed_camera.start()
-
     # 初始化数据采集器。一个运行目录可保存多个 teleop episode。
     timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     data_path = Path(root_dir) / "data" / "demo" / timestamp
     collector = LeRobotDataCollector(
-        repo_id="local/jaka_s5_demo",
+        repo_id="local/jaka_s5_pick_place",
         root=data_path,
         fps=30,
         state_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
         action_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
-        task="Just a Demo",
-        camera_shapes={"wrist": image_shape, "agent_view": image_shape},
+        task="Pick an orange and place it into the pink bowl.",
+        camera_shapes={"wrist": wrist_shape, "agent_view": agent_view_shape},
     )
 
     episode_count = 0
@@ -80,7 +90,7 @@ def main(cfg: DictConfig):
         while True:
             gripper.set_pos(0)  # 夹爪初始状态为闭合
             ramp_to_ultrahands(arm, ultrahands)  # 缓慢移动到 Ultrahands 位置
-            teleop(arm, gripper, ultrahands, zed_camera, collector, image_shape)
+            teleop(arm, gripper, ultrahands, agent_view_camera, wrist_camera, collector)
             episode_count += 1
             print(f"Episode {episode_count} saved. Ready for the next episode.")
     except KeyboardInterrupt:
@@ -92,7 +102,8 @@ def main(cfg: DictConfig):
         collector.finalize()
         ultrahands.stop()
         arm.stop()
-        zed_camera.stop()
+        wrist_camera.stop()
+        agent_view_camera.stop()
 
 
 def ramp_to_ultrahands(arm: JakaS5, ultrahands: UltrahandsClient):
@@ -122,15 +133,11 @@ def teleop(
     arm: JakaS5,
     gripper: AG95,
     ultrahands: UltrahandsClient,
-    zed_camera: ZedCamera,
+    agent_view_camera: ZedCamera,
+    wrist_camera: OrbbecCamera,
     collector: LeRobotDataCollector,
-    image_shape: tuple[int, int, int],
 ):
     print("teleop started, press Y to stop...", end="", flush=True)
-
-    static_image = load_static_rgb_image(
-        Path(root_dir) / "data" / "dog.jpg", image_shape[0], image_shape[1]
-    )
 
     # frequency config
     dt = 1.0 / 30.0
@@ -164,7 +171,8 @@ def teleop(
         last_rb = rb_pressed
 
         # capture images
-        agent_view_image = zed_camera.read()
+        agent_view_image = agent_view_camera.read()
+        wrist_image = wrist_camera.read()
 
         # collect data
         joint_state = arm.get_joint_position()
@@ -181,7 +189,7 @@ def teleop(
                 *angles[:JOINT_COUNT],
                 gripper_target,
             ],
-            images={"wrist": static_image, "agent_view": agent_view_image},
+            images={"wrist": wrist_image, "agent_view": agent_view_image},
         )
 
         # check stop condition
@@ -194,10 +202,10 @@ def teleop(
 
         # frequency control
         sleep_s = next_tick - time.perf_counter()
-        # print(f"Total:{sleep_s}ms")
         if sleep_s > 0:
             time.sleep(sleep_s)
         else:
+            print(f"Total:{sleep_s}ms")
             next_tick = time.perf_counter()
 
 
