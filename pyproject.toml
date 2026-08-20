@@ -9,4 +9,5 @@ dependencies = [
     "lerobot[dataset]>=0.6.1",
     "opencv-python>=4.8",
     "pyopengl>=3.1.10",
+    "pyorbbecsdk2>=2.0.18",
 ]
