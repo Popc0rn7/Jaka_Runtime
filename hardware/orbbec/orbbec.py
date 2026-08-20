@@ -13,6 +13,7 @@ camera by serial number instead.
 from __future__ import annotations
 
 import threading
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -25,6 +26,13 @@ SUPPORTED_COLOR_FORMATS = ("MJPG", "YUYV", "RGB", "BGR")
 # Per-frame wait budget. A timeout returns None and is retried, which is normal
 # at stream start; it is not treated as a failure.
 FRAME_TIMEOUT_MS = 1000
+
+# The stream counts as stable once this many consecutive frame gaps stay within
+# MAX_STABLE_GAP_PERIODS nominal frame periods. A cold start delivers one frame
+# and then stalls for roughly two seconds, so waiting for a single frame would
+# hand the caller a stream that cannot yet sustain its nominal rate.
+STABLE_FRAMES = 3
+MAX_STABLE_GAP_PERIODS = 3
 
 
 class OrbbecCamera:
@@ -44,7 +52,8 @@ class OrbbecCamera:
         fps: Requested color frame rate.
         color_format: Requested pixel format, one of
             :data:`SUPPORTED_COLOR_FORMATS`; empty keeps the device default.
-        startup_timeout: Seconds :meth:`start` waits for the first color frame.
+        startup_timeout: Seconds :meth:`start` waits for the color stream to
+            reach its nominal frame rate. Allow at least ~3s for a cold start.
     """
 
     def __init__(
@@ -54,7 +63,7 @@ class OrbbecCamera:
         height: int = 720,
         fps: int = 30,
         color_format: str = "",
-        startup_timeout: float = 3.0,
+        startup_timeout: float = 5.0,
     ) -> None:
         if width <= 0 or height <= 0 or fps <= 0:
             raise ValueError("width, height, and fps must be positive")
@@ -77,7 +86,7 @@ class OrbbecCamera:
         self._pipeline = None
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._frame_ready = threading.Event()
+        self._stream_ready = threading.Event()
         self._frame_lock = threading.Lock()
         self._latest_frame: np.ndarray | None = None
         self._worker_error: Exception | None = None
@@ -85,8 +94,10 @@ class OrbbecCamera:
     def start(self) -> None:
         """Open the camera and start the latest-frame capture thread.
 
-        Startup waits for the first valid RGB frame. After that, :meth:`read`
-        only reads an in-memory reference and never waits for the SDK.
+        Startup waits until the stream actually sustains ``fps`` — not merely
+        until the first frame arrives — so that :meth:`read` never hands the
+        caller duplicate frames from a cold start. After that, :meth:`read` only
+        reads an in-memory reference and never waits for the SDK.
         """
         if self._pipeline is not None:
             if self._thread is not None and self._thread.is_alive():
@@ -142,7 +153,7 @@ class OrbbecCamera:
         config.enable_stream(profile)
 
         self._stop_event.clear()
-        self._frame_ready.clear()
+        self._stream_ready.clear()
         with self._frame_lock:
             self._latest_frame = None
             self._worker_error = None
@@ -159,10 +170,11 @@ class OrbbecCamera:
         )
         self._thread.start()
 
-        if not self._frame_ready.wait(timeout=self.startup_timeout):
+        if not self._stream_ready.wait(timeout=self.startup_timeout):
             self.stop()
             raise RuntimeError(
-                f"Timed out after {self.startup_timeout:.1f}s waiting for a color frame"
+                f"Timed out after {self.startup_timeout:.1f}s waiting for a stable "
+                f"{self.fps}fps color stream"
             )
         with self._frame_lock:
             worker_error = self._worker_error
@@ -190,6 +202,10 @@ class OrbbecCamera:
 
     def _capture_loop(self, pipeline: object, cv2: object, np: object) -> None:
         """Continuously drain the pipeline and publish only the most recent frame."""
+        max_gap = MAX_STABLE_GAP_PERIODS / self.fps
+        # Both counters belong to this thread alone, so they need no lock.
+        last_arrival: float | None = None
+        stable_gaps = 0
         try:
             while not self._stop_event.is_set():
                 frames = pipeline.wait_for_frames(FRAME_TIMEOUT_MS)
@@ -199,13 +215,22 @@ class OrbbecCamera:
                 if color_frame is None:
                     continue
                 frame_rgb = self._prepare_frame(color_frame, cv2, np)
+                arrival = time.perf_counter()
+                stable_gaps = (
+                    stable_gaps + 1
+                    if last_arrival is not None and arrival - last_arrival <= max_gap
+                    else 0
+                )
+                last_arrival = arrival
                 with self._frame_lock:
                     self._latest_frame = frame_rgb
-                self._frame_ready.set()
+                if stable_gaps >= STABLE_FRAMES:
+                    self._stream_ready.set()
         except Exception as error:
             with self._frame_lock:
                 self._worker_error = error
-            self._frame_ready.set()
+            # Unblock start() instead of making it wait out the full timeout.
+            self._stream_ready.set()
 
     def _prepare_frame(self, color_frame: object, cv2: object, np: object) -> np.ndarray:
         """Decode one color frame to an RGB array at its native resolution."""
@@ -252,7 +277,7 @@ class OrbbecCamera:
         with self._frame_lock:
             self._latest_frame = None
             self._worker_error = None
-        self._frame_ready.clear()
+        self._stream_ready.clear()
 
     close = stop
 

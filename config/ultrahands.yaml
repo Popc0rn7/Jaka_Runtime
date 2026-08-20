@@ -23,6 +23,17 @@ zed:
   output_height: 480
   startup_timeout: 3.0
 
+# Orbbec Gemini 336L color stream via pyorbbecsdk. Recorded at its native
+# 1280x720; cropping/downscaling to the 640x360 training size belongs to dataset
+# export, so the driver itself never resizes.
+orbbec:
+  serial_number: ""      # empty picks the first camera found
+  width: 1280
+  height: 720
+  fps: 30
+  color_format: ""       # empty keeps the device default (MJPG on the 336L)
+  startup_timeout: 5.0   # a cold start needs ~3s to reach a stable 30fps
+
 replay:
   dataset_root: "data/demo/20260819_145248"
   confirm: false
