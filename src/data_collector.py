@@ -1,49 +1,23 @@
-"""LeRobot v3 dataset writer for the JAKA S5 teleoperation loop.
+"""Official LeRobot v2.1 dataset writer for the JAKA S5 teleoperation loop.
 
-The collector deliberately has no dependency on the robot, gripper, or camera
-drivers.  Teleoperation owns those devices; it calls :meth:`record_step` once
-per control tick with the measured state, commanded action, and optional RGB
-camera frames.
+The collector deliberately has no dependency on robot, gripper, or camera
+drivers. It delegates all dataset validation, statistics, parquet metadata,
+and video encoding to ``lerobot==0.3.3``, the release that creates the
+official LeRobot v2.1 format while remaining compatible with NumPy < 2.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+import shutil
 from typing import Any
 
 import numpy as np
 
 
 class LeRobotDataCollector:
-    """Record complete teleoperation episodes in the LeRobot v3 format.
-
-    Args:
-        repo_id: LeRobot dataset identifier (for example ``"local/jaka_s5"``).
-            It is metadata only; no data is uploaded automatically.
-        root: Empty directory in which the local v3 dataset is created.
-        fps: Teleoperation control frequency.
-        state_names: Names for the measured robot state entries.
-        action_names: Names for the commanded action entries.
-        camera_shapes: Optional mapping from camera name to ``(height, width,
-            channels)``. Frames are expected as uint8 RGB HWC arrays. A camera
-            called ``wrist`` becomes ``observation.images.wrist``.
-        task: Default natural-language task stored on each recorded frame.
-
-    Example:
-        collector = LeRobotDataCollector(
-            repo_id="local/jaka_s5_pick",
-            root="outputs/lerobot/jaka_s5_pick",
-            state_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.pos"],
-            action_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.pos"],
-            camera_shapes={"front": (480, 640, 3)},
-            task="Pick up the block",
-        )
-        # Call once in every teleop step.
-        collector.record_step(state, action, {"front": rgb_frame})
-        collector.save_episode()
-        collector.finalize()
-    """
+    """Record complete teleoperation episodes in official LeRobot v2.1 format."""
 
     def __init__(
         self,
@@ -74,14 +48,15 @@ class LeRobotDataCollector:
         self.camera_shapes = self._normalize_camera_shapes(camera_shapes or {})
         self._closed = False
 
-        # Delayed import keeps teleop importable on machines used only for robot
-        # control. `uv sync` installs the required packages declared in pyproject.
+        # v2.1 writes frames asynchronously when configured, then validates
+        # and encodes official episode/video artifacts on save. Its API has no
+        # streaming-video encoder; retain this parameter for caller compatibility.
+        del encoder_queue_maxsize
         try:
-            from lerobot.configs.video import RGBEncoderConfig
             from lerobot.datasets.lerobot_dataset import LeRobotDataset
         except ImportError as exc:
             raise RuntimeError(
-                "LeRobot v3 dataset dependencies are unavailable. Run `uv sync`."
+                "LeRobot v2.1 dataset dependencies are unavailable. Run `uv sync`."
             ) from exc
 
         if self.root.exists() and any(self.root.iterdir()):
@@ -97,11 +72,12 @@ class LeRobotDataCollector:
             robot_type=robot_type,
             features=self._make_features(),
             use_videos=bool(self.camera_shapes),
-            # H.264 is broadly supported by the FFmpeg builds bundled with PyAV.
-            rgb_encoder=RGBEncoderConfig(vcodec="h264"),
-            streaming_encoding=streaming_encoding and bool(self.camera_shapes),
-            encoder_queue_maxsize=encoder_queue_maxsize,
+            image_writer_threads=4 if streaming_encoding and self.camera_shapes else 0,
+            batch_encoding_size=1,
         )
+        # Existing teleop cleanup calls this method on ``dataset`` directly.
+        # v0.3.3 exposes the same state as ``episode_buffer['size']`` instead.
+        self.dataset.has_pending_frames = self.has_pending_frames
 
     def record_step(
         self,
@@ -111,20 +87,15 @@ class LeRobotDataCollector:
         *,
         task: str | None = None,
     ) -> None:
-        """Append one synchronized teleoperation sample to the current episode.
-
-        ``state`` should contain measured values (e.g. JAKA joint feedback and
-        gripper feedback); ``action`` should contain the command sent in this
-        tick. Images must be RGB ``uint8`` arrays in HWC layout.
-        """
+        """Append one synchronized teleoperation sample to the current episode."""
         self._ensure_open()
+        sample_task = task if task is not None else self.task
+        if not sample_task.strip():
+            raise ValueError("task must not be empty")
         frame: dict[str, Any] = {
             "observation.state": self._as_vector(state, self.state_names, "state"),
             "action": self._as_vector(action, self.action_names, "action"),
-            "task": task if task is not None else self.task,
         }
-        if not frame["task"].strip():
-            raise ValueError("task must not be empty")
 
         supplied_images = images or {}
         if set(supplied_images) != set(self.camera_shapes):
@@ -142,28 +113,37 @@ class LeRobotDataCollector:
                 raise TypeError(f"Camera '{name}' must be uint8 RGB, got {image.dtype}")
             frame[f"observation.images.{name}"] = image
 
-        self.dataset.add_frame(frame)
+        self.dataset.add_frame(frame, task=sample_task)
 
     def save_episode(self) -> None:
-        """Commit the current episode. Empty episodes are rejected."""
+        """Validate, encode, and commit the current official v2.1 episode."""
         self._ensure_open()
-        if not self.dataset.has_pending_frames():
+        if not self.has_pending_frames():
             raise RuntimeError("Cannot save an episode with no recorded frames")
         self.dataset.save_episode()
 
     def discard_episode(self) -> None:
-        """Discard all frames collected since the last :meth:`save_episode`."""
+        """Discard frames and temporary images from the current episode."""
         self._ensure_open()
-        self.dataset.clear_episode_buffer(delete_images=True)
+        self.dataset._wait_image_writer()
+        episode_index = self.dataset.episode_buffer["episode_index"]
+        self.dataset.clear_episode_buffer()
+        for camera_name in self.camera_shapes:
+            image_dir = self.root / "images" / f"observation.images.{camera_name}" / f"episode_{episode_index:06d}"
+            if image_dir.is_dir():
+                shutil.rmtree(image_dir)
 
     def finalize(self) -> None:
-        """Close parquet/video writers. Call after the final saved episode."""
+        """Flush LeRobot's asynchronous image writer after the final episode."""
         if self._closed:
             return
-        if self.dataset.has_pending_frames():
+        if self.has_pending_frames():
             raise RuntimeError("Current episode has unsaved frames; call save_episode() or discard_episode()")
-        self.dataset.finalize()
+        self.dataset.stop_image_writer()
         self._closed = True
+
+    def has_pending_frames(self) -> bool:
+        return bool(self.dataset.episode_buffer["size"])
 
     def __enter__(self) -> "LeRobotDataCollector":
         return self

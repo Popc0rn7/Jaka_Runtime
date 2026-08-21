@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 import time
 import hydra
@@ -43,52 +44,60 @@ def load_static_rgb_image(path: Path, height: int, width: int) -> np.ndarray:
 
 @hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
 def main(cfg: DictConfig):
-    agent_view_shape = (int(cfg.zed.output_height), int(cfg.zed.output_width), 3)  # HWC
+    agent_shape = (int(cfg.zed.output_height), int(cfg.zed.output_width), 3)  # HWC
     wrist_shape = (
         int(cfg.orbbec.output_height),
         int(cfg.orbbec.output_width),
         3,
     )  # HWC
 
-    # 初始化 Orbbec Camera
-    wrist_camera = OrbbecCamera(**cfg.orbbec)
-    wrist_camera.start()
+    wrist_camera = None
+    agent_camera = None
+    arm = None
+    ultrahands = None
+    collector = None
+    display = None
 
-    # 初始化 Zed Camera
-    agent_view_camera = ZedCamera(**cfg.zed)
-    agent_view_camera.start()
-
-    # 启动arm
-    arm = JakaS5(ip="192.168.2.121", freq_hz=30)
-    arm.start()
-
-    # 启动gripper
-    gripper = AG95(port=cfg.gripper.port)
-    gripper.set_force(cfg.gripper.force)
-    gripper.set_vel(cfg.gripper.velocity)
-
-    # 初始化 Ultrahands Client
-    ultrahands = UltrahandsClient(**cfg.client)
-    ultrahands.start()
-
-    # 初始化数据采集器。一个运行目录可保存多个 teleop episode。
-    timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    data_path = Path(root_dir) / "data" / "demo" / timestamp
-    collector = LeRobotDataCollector(
-        repo_id="local/jaka_s5_pick_place",
-        root=data_path,
-        fps=30,
-        state_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
-        action_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
-        task="Pick an orange and place it into the pink bowl.",
-        camera_shapes={"wrist": wrist_shape, "agent_view": agent_view_shape},
-    )
-
-    display = DualCameraDisplay(**cfg.display)
-    display.start()
-
-    episode_count = 0
     try:
+        # 初始化 Orbbec Camera
+        wrist_camera = OrbbecCamera(**cfg.orbbec)
+        wrist_camera.start()
+
+        # 初始化 Zed Camera
+        agent_camera = ZedCamera(**cfg.zed)
+        agent_camera.start()
+
+        # 启动arm
+        arm = JakaS5(ip="192.168.2.103", freq_hz=30)
+        arm.start()
+
+        # 启动gripper
+        gripper = AG95(port=cfg.gripper.port)
+        gripper.set_force(cfg.gripper.force)
+        gripper.set_vel(cfg.gripper.velocity)
+
+        # 初始化 Ultrahands Client
+        ultrahands = UltrahandsClient(**cfg.client)
+        ultrahands.start()
+
+        # 初始化数据采集器。一个运行目录可保存多个 teleop episode。
+        data_name = "jaka_s5_pick_place"
+        timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        data_path = Path(root_dir) / "data" / data_name / timestamp
+        collector = LeRobotDataCollector(
+            repo_id="local/" + data_name,
+            root=data_path,
+            fps=30,
+            state_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
+            action_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
+            task="Pick an orange and place it into the pink bowl.",
+            camera_shapes={"wrist": wrist_shape, "agent_view": agent_shape},
+        )
+
+        display = DualCameraDisplay(**cfg.display)
+        display.start()
+
+        episode_count = 0
         # Keep devices and the dataset open for the whole collection session.
         # Completing an episode returns here and prepares the next one.
         while True:
@@ -98,7 +107,7 @@ def main(cfg: DictConfig):
                 arm,
                 gripper,
                 ultrahands,
-                agent_view_camera,
+                agent_camera,
                 wrist_camera,
                 collector,
                 display,
@@ -108,15 +117,20 @@ def main(cfg: DictConfig):
     except KeyboardInterrupt:
         print("Collection interrupted.")
     finally:
-        # Never leave an incomplete episode in the LeRobot dataset.
-        if collector.dataset.has_pending_frames():
-            collector.discard_episode()
-        collector.finalize()
-        display.stop()
-        ultrahands.stop()
-        arm.stop()
-        wrist_camera.stop()
-        agent_view_camera.stop()
+        if collector is not None:
+            if collector.dataset.has_pending_frames():
+                collector.discard_episode()
+            collector.finalize()
+
+        for resource in (
+            display,
+            ultrahands,
+            arm,
+            wrist_camera,
+            agent_camera,
+        ):
+            if resource is not None:
+                resource.stop()
 
 
 def ramp_to_ultrahands(arm: JakaS5, ultrahands: UltrahandsClient):

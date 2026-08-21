@@ -7,11 +7,15 @@ requires-python = ">=3.12"
 dependencies = [
     "flask>=3.1.3",
     "hydra-core>=1.3.5",
-    "lerobot[dataset]>=0.6.1",
+    "numpy>=1.22.4,<2.0.0",
     "opencv-python>=4.8",
+    "openpi-client>=0.1.2",
+    # openpi-client imports typing_extensions but does not currently declare it.
+    "typing-extensions>=4.12",
     "pydhgripper>=1.0.2",
     "pyopengl>=3.1.10",
     "pyorbbecsdk2>=2.0.18",
+    "lerobot==0.3.3",
     "ultrahands-client",
 ]
 

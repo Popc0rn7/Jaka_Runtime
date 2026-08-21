@@ -1,4 +1,4 @@
-"""Replay one episode of a local LeRobot v3 dataset on the JAKA S5 hardware.
+"""Replay one episode of a local LeRobot v2.1 or v3 dataset on JAKA S5.
 
 Usage:
     uv run python script/replay.py \
@@ -27,16 +27,22 @@ sys.path.append(root_dir)
 
 from hardware.jaka_s5 import JOINT_COUNT, JakaS5
 
-# Seconds spent ramping from the current pose to the episode's first pose.
+# Keep the operator in control of the transition into every episode.  These
+# values intentionally mirror teleop.py's short pause before it starts moving.
 RAMP_SECONDS = 2.0
+START_DELAY_SECONDS = 2.0
 ACTION_NAMES = [*(f"joint_{i}.pos" for i in range(JOINT_COUNT)), "gripper.target_pos"]
 
 
 def read_episode_rows(dataset_root: Path) -> list[dict]:
-    """Read meta/episodes/**.parquet, dropping the bulky per-episode stats columns."""
+    """Read episode metadata from either supported LeRobot on-disk layout."""
+    v21_path = dataset_root / "meta" / "episodes.jsonl"
+    if v21_path.is_file():
+        return [json.loads(line) for line in v21_path.read_text(encoding="utf-8").splitlines() if line]
+
     episode_files = sorted((dataset_root / "meta" / "episodes").rglob("*.parquet"))
     if not episode_files:
-        raise FileNotFoundError(f"No episode metadata under {dataset_root / 'meta' / 'episodes'}")
+        raise FileNotFoundError(f"No LeRobot episode metadata found under {dataset_root / 'meta'}")
 
     rows: list[dict] = []
     for path in episode_files:
@@ -46,7 +52,9 @@ def read_episode_rows(dataset_root: Path) -> list[dict]:
     return rows
 
 
-def load_episode(dataset_root: Path, episode_index: int) -> tuple[int, str, list[list[float]]]:
+def load_episode(
+    dataset_root: Path, episode_index: int
+) -> tuple[int, str, list[list[float]]]:
     """Return (fps, task, actions) for one episode, without a Hugging Face cache."""
     info_path = dataset_root / "meta" / "info.json"
     if not info_path.is_file():
@@ -68,10 +76,13 @@ def load_episode(dataset_root: Path, episode_index: int) -> tuple[int, str, list
         raise ValueError(f"Episode {episode_index} not found; dataset has {available}")
     episode = matches[0]
 
-    data_file = dataset_root / info["data_path"].format(
-        chunk_index=episode["data/chunk_index"],
-        file_index=episode["data/file_index"],
-    )
+    if info.get("codebase_version") == "v2.1":
+        data_file = dataset_root / "data" / f"chunk-{episode_index // info['chunks_size']:03d}" / f"episode_{episode_index:06d}.parquet"
+    else:
+        data_file = dataset_root / info["data_path"].format(
+            chunk_index=episode["data/chunk_index"],
+            file_index=episode["data/file_index"],
+        )
     if not data_file.is_file():
         raise FileNotFoundError(f"Missing data file: {data_file}")
 
@@ -105,13 +116,67 @@ def to_gripper_position(action: list[float], frame_index: int) -> int:
     return target
 
 
+def wait_for_operator(message: str) -> None:
+    """Create an explicit, repeatable safety boundary before robot motion."""
+    input(f"{message}\nPress Enter when the workspace is clear... ")
+
+
+def ramp_to_episode_start(
+    arm: JakaS5, gripper: AG95, first_action: list[float], fps: int
+) -> int:
+    """Slowly align the robot with an episode's initial command."""
+    wait_for_operator("Ready to ramp to this episode's first pose.")
+    print(
+        f"Ramping starts in {START_DELAY_SECONDS:.0f} seconds. "
+        "Keep the emergency stop accessible.",
+        flush=True,
+    )
+    time.sleep(START_DELAY_SECONDS)
+
+    gripper_target = to_gripper_position(first_action, 0)
+    arm.JointCtrl(first_action[:JOINT_COUNT], step_num=round(RAMP_SECONDS * fps))
+    gripper.set_pos(gripper_target)
+    time.sleep(RAMP_SECONDS)
+    print("Ramp complete.")
+    return gripper_target
+
+
+def replay_episode(
+    arm: JakaS5,
+    gripper: AG95,
+    actions: list[list[float]],
+    fps: int,
+    episode_index: int,
+) -> None:
+    """Replay one already-ramped episode at its recorded control frequency."""
+    gripper_target = ramp_to_episode_start(arm, gripper, actions[0], fps)
+    wait_for_operator(
+        f"Episode {episode_index} is in its start pose and ready to replay."
+    )
+    print(f"Replay starts in {START_DELAY_SECONDS:.0f} seconds...", flush=True)
+    time.sleep(START_DELAY_SECONDS)
+
+    dt = 1.0 / fps
+    next_tick = time.perf_counter()
+    for frame_index, action in enumerate(actions):
+        arm.JointCtrl(action[:JOINT_COUNT], step_num=2)
+        target = to_gripper_position(action, frame_index)
+        if target != gripper_target:
+            gripper.set_pos(target)
+            gripper_target = target
+
+        next_tick += dt
+        sleep_s = next_tick - time.perf_counter()
+        if sleep_s > 0:
+            time.sleep(sleep_s)
+        else:
+            next_tick = time.perf_counter()
+
+    print(f"Replay of episode {episode_index} done.")
+
+
 @hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
 def main(cfg: DictConfig):
-    if not cfg.replay.confirm:
-        raise RuntimeError(
-            "Replay moves the real robot. Re-run with replay.confirm=true after "
-            "checking the workspace and the emergency stop."
-        )
 
     dataset_root = Path(cfg.replay.dataset_root)
     if not dataset_root.is_absolute():
@@ -122,8 +187,8 @@ def main(cfg: DictConfig):
     print(f"Dataset : {dataset_root}")
     print(f"Episode : {episode_index} — {len(actions)} frames at {fps} Hz")
     print(f"Task    : {task}")
-    print(f"Replay starts in 3 seconds. Keep the emergency stop accessible.")
-    time.sleep(3)
+    if not actions:
+        raise ValueError(f"Episode {episode_index} has no actions to replay")
 
     arm = JakaS5(ip="192.168.2.121", freq_hz=fps)
     gripper = AG95(port=cfg.gripper.port)
@@ -132,31 +197,7 @@ def main(cfg: DictConfig):
         gripper.set_force(cfg.gripper.force)
         gripper.set_vel(cfg.gripper.velocity)
 
-        # Ramp to the episode's first pose slowly; the arm may be anywhere now.
-        first_action = actions[0]
-        gripper_target = to_gripper_position(first_action, 0)
-        print(f"Ramping to the first pose over {RAMP_SECONDS:.0f}s...")
-        arm.JointCtrl(first_action[:JOINT_COUNT], step_num=round(RAMP_SECONDS * fps))
-        gripper.set_pos(gripper_target)
-        time.sleep(RAMP_SECONDS)
-
-        dt = 1.0 / fps
-        next_tick = time.perf_counter()
-        for frame_index, action in enumerate(actions):
-            arm.JointCtrl(action[:JOINT_COUNT], step_num=2)
-            target = to_gripper_position(action, frame_index)
-            if target != gripper_target:
-                gripper.set_pos(target)
-                gripper_target = target
-
-            next_tick += dt
-            sleep_s = next_tick - time.perf_counter()
-            if sleep_s > 0:
-                time.sleep(sleep_s)
-            else:
-                next_tick = time.perf_counter()
-
-        print(f"Replay of episode {episode_index} done.")
+        replay_episode(arm, gripper, actions, fps, episode_index)
     finally:
         arm.stop()
 
