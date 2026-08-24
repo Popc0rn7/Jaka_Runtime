@@ -12,3 +12,4 @@ venv/
 outputs
 data
 Log
+.worktrees/
