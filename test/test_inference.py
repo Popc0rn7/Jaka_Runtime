@@ -81,15 +81,14 @@ class InitializeRobotTest(unittest.TestCase):
             init_joint=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
             mock=False,
             ramp_steps=INITIAL_POSITION_RAMP_STEPS,
-            gripper_position_min=100,
-            gripper_position_max=900,
+            gripper_position_scale=900,
         )
 
         self.assertEqual(len(arm.commands), 1)
         joints, step_num = arm.commands[0]
         np.testing.assert_allclose(joints, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
         self.assertEqual(step_num, 250)
-        self.assertEqual(gripper.positions, [100])
+        self.assertEqual(gripper.positions, [0])
 
     def test_rejects_an_invalid_initial_pose(self) -> None:
         with self.assertRaisesRegex(ValueError, "6 joint values"):

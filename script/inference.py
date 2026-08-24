@@ -122,13 +122,12 @@ def make_observation(
 def set_gripper(
     gripper: Any,
     target: float,
-    position_min: int = 0,
-    position_max: int = 1000,
+    position_scale: int = 1000,
 ) -> None:
     """Send a validated normalized gripper target to the AG95."""
     if not 0.0 <= target <= 1.0:
         raise ValueError(f"Policy gripper target must be in [0, 1], got {target}")
-    gripper.set_pos(normalized_to_position(target, position_min, position_max))
+    gripper.set_pos(normalized_to_position(target, position_scale))
 
 
 def validate_actions(
@@ -181,8 +180,7 @@ def execute_action(
     *,
     mock: bool,
     ramp_steps: int,
-    gripper_position_min: int = 0,
-    gripper_position_max: int = 1000,
+    gripper_position_scale: int = 1000,
 ) -> None:
     """Execute exactly one buffered action; only the control thread calls this."""
     joints = action[:JOINT_COUNT].tolist()
@@ -192,9 +190,7 @@ def execute_action(
         return
     assert arm is not None and gripper is not None
     arm.JointCtrl(joints, step_num=ramp_steps)
-    set_gripper(
-        gripper, gripper_target, gripper_position_min, gripper_position_max
-    )
+    set_gripper(gripper, gripper_target, gripper_position_scale)
 
 
 def initialize_robot(
@@ -204,8 +200,7 @@ def initialize_robot(
     init_joint: list[float],
     mock: bool,
     ramp_steps: int,
-    gripper_position_min: int = 0,
-    gripper_position_max: int = 1000,
+    gripper_position_scale: int = 1000,
 ) -> None:
     """Move to the configured pose and close the gripper before inference."""
     if len(init_joint) != JOINT_COUNT:
@@ -217,15 +212,14 @@ def initialize_robot(
         return
     assert arm is not None and gripper is not None
     arm.JointCtrl(init_joint, step_num=ramp_steps)
-    set_gripper(gripper, 0.0, gripper_position_min, gripper_position_max)
+    set_gripper(gripper, 0.0, gripper_position_scale)
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
     fps = int(cfg.jaka_s5.freq_hz)
     init_joint = [float(joint) for joint in cfg.jaka_s5.init_joint]
-    gripper_position_min = int(cfg.dh_gripper.position_min)
-    gripper_position_max = int(cfg.dh_gripper.position_max)
+    gripper_position_scale = int(cfg.dh_gripper.position_scale)
 
     agent_camera = wrist_camera = arm = gripper = None
     policy = OpenPIPolicyClient(
@@ -257,8 +251,7 @@ def main(cfg: DictConfig) -> None:
             init_joint=init_joint,
             mock=MOCK,
             ramp_steps=INITIAL_POSITION_RAMP_STEPS,
-            gripper_position_min=gripper_position_min,
-            gripper_position_max=gripper_position_max,
+            gripper_position_scale=gripper_position_scale,
         )
         policy.reset()
         worker.start()
@@ -296,8 +289,7 @@ def main(cfg: DictConfig) -> None:
                     gripper,
                     mock=MOCK,
                     ramp_steps=2,
-                    gripper_position_min=gripper_position_min,
-                    gripper_position_max=gripper_position_max,
+                    gripper_position_scale=gripper_position_scale,
                 )
                 last_command = action[:JOINT_COUNT].copy()
                 gripper_state = float(action[JOINT_COUNT])

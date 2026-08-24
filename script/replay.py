@@ -110,14 +110,11 @@ def load_episode(
 def to_gripper_position(
     action: list[float],
     frame_index: int,
-    position_min: int = 0,
-    position_max: int = 1000,
+    position_scale: int = 1000,
 ) -> int:
-    """Convert the normalised gripper target to configured AG95 bounds."""
+    """Convert the normalized gripper target using the configured scale."""
     try:
-        return normalized_to_position(
-            action[JOINT_COUNT], position_min, position_max
-        )
+        return normalized_to_position(action[JOINT_COUNT], position_scale)
     except ValueError as error:
         raise ValueError(
             f"Frame {frame_index} has an out-of-range gripper target: {action[JOINT_COUNT]}"
@@ -134,8 +131,7 @@ def ramp_to_episode_start(
     gripper: AG95,
     first_action: list[float],
     fps: int,
-    gripper_position_min: int = 0,
-    gripper_position_max: int = 1000,
+    gripper_position_scale: int = 1000,
 ) -> int:
     """Slowly align the robot with an episode's initial command."""
     wait_for_operator("Ready to ramp to this episode's first pose.")
@@ -146,9 +142,7 @@ def ramp_to_episode_start(
     )
     time.sleep(START_DELAY_SECONDS)
 
-    gripper_target = to_gripper_position(
-        first_action, 0, gripper_position_min, gripper_position_max
-    )
+    gripper_target = to_gripper_position(first_action, 0, gripper_position_scale)
     arm.JointCtrl(first_action[:JOINT_COUNT], step_num=round(RAMP_SECONDS * fps))
     gripper.set_pos(gripper_target)
     time.sleep(RAMP_SECONDS)
@@ -162,8 +156,7 @@ def replay_episode(
     actions: list[list[float]],
     fps: int,
     episode_index: int,
-    gripper_position_min: int = 0,
-    gripper_position_max: int = 1000,
+    gripper_position_scale: int = 1000,
 ) -> None:
     """Replay one already-ramped episode at its recorded control frequency."""
     gripper_target = ramp_to_episode_start(
@@ -171,8 +164,7 @@ def replay_episode(
         gripper,
         actions[0],
         fps,
-        gripper_position_min,
-        gripper_position_max,
+        gripper_position_scale,
     )
     wait_for_operator(
         f"Episode {episode_index} is in its start pose and ready to replay."
@@ -184,9 +176,7 @@ def replay_episode(
     next_tick = time.perf_counter()
     for frame_index, action in enumerate(actions):
         arm.JointCtrl(action[:JOINT_COUNT], step_num=2)
-        target = to_gripper_position(
-            action, frame_index, gripper_position_min, gripper_position_max
-        )
+        target = to_gripper_position(action, frame_index, gripper_position_scale)
         if target != gripper_target:
             gripper.set_pos(target)
             gripper_target = target
@@ -208,8 +198,7 @@ def main(cfg: DictConfig):
     if not dataset_root.is_absolute():
         dataset_root = Path(root_dir) / dataset_root
     episode_index = int(cfg.replay.episode)
-    gripper_position_min = int(cfg.dh_gripper.position_min)
-    gripper_position_max = int(cfg.dh_gripper.position_max)
+    gripper_position_scale = int(cfg.dh_gripper.position_scale)
 
     fps, task, actions = load_episode(dataset_root, episode_index)
     print(f"Dataset : {dataset_root}")
@@ -233,8 +222,7 @@ def main(cfg: DictConfig):
             actions,
             fps,
             episode_index,
-            gripper_position_min,
-            gripper_position_max,
+            gripper_position_scale,
         )
     finally:
         arm.stop()
