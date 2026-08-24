@@ -12,6 +12,17 @@ def test_config_composes_hardware_sections() -> None:
     assert cfg.dh_gripper.port == "/dev/ttyUSB0"
     assert cfg.client.host == "192.168.2.108"
     assert cfg.safety.max_joint_speed == 3.0
+    assert set(cfg) >= {
+        "jaka_s5",
+        "dh_gripper",
+        "client",
+        "policy",
+        "safety",
+        "zed",
+        "orbbec",
+        "display",
+        "replay",
+    }
 
 
 def test_config_accepts_device_overrides() -> None:

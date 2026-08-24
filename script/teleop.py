@@ -17,6 +17,7 @@ from hardware.ultrahands import UltrahandsClient
 from hardware.zed import ZedCamera
 from hardware.orbbec import OrbbecCamera
 from src.data_collector import LeRobotDataCollector
+from src.gripper import normalized_to_position
 from src.teleop_display import DualCameraDisplay
 
 
@@ -102,7 +103,13 @@ def main(cfg: DictConfig):
         # Keep devices and the dataset open for the whole collection session.
         # Completing an episode returns here and prepares the next one.
         while True:
-            gripper.set_pos(0)  # 夹爪初始状态为闭合
+            gripper.set_pos(
+                normalized_to_position(
+                    0.0,
+                    int(cfg.dh_gripper.position_min),
+                    int(cfg.dh_gripper.position_max),
+                )
+            )  # 夹爪初始状态为闭合
             ramp_to_ultrahands(arm, ultrahands)  # 缓慢移动到 Ultrahands 位置
             teleop(
                 arm,
@@ -113,6 +120,8 @@ def main(cfg: DictConfig):
                 collector,
                 display,
                 fps,
+                int(cfg.dh_gripper.position_min),
+                int(cfg.dh_gripper.position_max),
             )
             episode_count += 1
             print(f"Episode {episode_count} saved. Ready for the next episode.")
@@ -167,6 +176,8 @@ def teleop(
     collector: LeRobotDataCollector,
     display: DualCameraDisplay,
     fps: int,
+    gripper_position_min: int,
+    gripper_position_max: int,
 ):
     print("teleop started, press Y to stop...", end="", flush=True)
 
@@ -198,7 +209,11 @@ def teleop(
         if rb_pressed and not last_rb:
             gripper_open = not gripper_open
             gripper_target = 1.0 if gripper_open else 0.0
-            gripper.set_pos(int(gripper_target * 1000))
+            gripper.set_pos(
+                normalized_to_position(
+                    gripper_target, gripper_position_min, gripper_position_max
+                )
+            )
         last_rb = rb_pressed
 
         # capture images

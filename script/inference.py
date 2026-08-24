@@ -26,6 +26,7 @@ sys.path.append(root_dir)
 from hardware.orbbec import OrbbecCamera
 from hardware.zed import ZedCamera
 from src.policy_client import OpenPIPolicyClient
+from src.gripper import normalized_to_position
 
 # Keep mock mode independent of JAKA's native SDK, which is only imported when
 # actual robot commands are requested.
@@ -121,11 +122,16 @@ def make_observation(
     }
 
 
-def set_gripper(gripper: Any, target: float) -> None:
+def set_gripper(
+    gripper: Any,
+    target: float,
+    position_min: int = 0,
+    position_max: int = 1000,
+) -> None:
     """Send a validated normalized gripper target to the AG95."""
     if not 0.0 <= target <= 1.0:
         raise ValueError(f"Policy gripper target must be in [0, 1], got {target}")
-    gripper.set_pos(round(target * 1000))
+    gripper.set_pos(normalized_to_position(target, position_min, position_max))
 
 
 def validate_actions(
@@ -178,6 +184,8 @@ def execute_action(
     *,
     mock: bool,
     ramp_steps: int,
+    gripper_position_min: int = 0,
+    gripper_position_max: int = 1000,
 ) -> None:
     """Execute exactly one buffered action; only the control thread calls this."""
     joints = action[:JOINT_COUNT].tolist()
@@ -187,7 +195,9 @@ def execute_action(
         return
     assert arm is not None and gripper is not None
     arm.JointCtrl(joints, step_num=ramp_steps)
-    set_gripper(gripper, gripper_target)
+    set_gripper(
+        gripper, gripper_target, gripper_position_min, gripper_position_max
+    )
 
 
 def ramp_to_policy_target(
@@ -197,17 +207,29 @@ def ramp_to_policy_target(
     *,
     mock: bool,
     ramp_steps: int,
+    gripper_position_min: int = 0,
+    gripper_position_max: int = 1000,
 ) -> None:
     """Move safely from the current pose to the first policy target."""
     if ramp_steps <= 0:
         raise ValueError("policy.ramp_steps must be positive")
-    execute_action(action, arm, gripper, mock=mock, ramp_steps=ramp_steps)
+    execute_action(
+        action,
+        arm,
+        gripper,
+        mock=mock,
+        ramp_steps=ramp_steps,
+        gripper_position_min=gripper_position_min,
+        gripper_position_max=gripper_position_max,
+    )
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
     fps = int(cfg.jaka_s5.freq_hz)
     ramp_steps = int(cfg.policy.ramp_steps)
+    gripper_position_min = int(cfg.dh_gripper.position_min)
+    gripper_position_max = int(cfg.dh_gripper.position_max)
 
     agent_camera = wrist_camera = arm = gripper = None
     policy = OpenPIPolicyClient(
@@ -274,6 +296,8 @@ def main(cfg: DictConfig) -> None:
             gripper,
             mock=MOCK,
             ramp_steps=ramp_steps,
+            gripper_position_min=gripper_position_min,
+            gripper_position_max=gripper_position_max,
         )
         last_command = first_action[:JOINT_COUNT].copy()
         gripper_state = float(first_action[JOINT_COUNT])
@@ -309,6 +333,8 @@ def main(cfg: DictConfig) -> None:
                     gripper,
                     mock=MOCK,
                     ramp_steps=2,
+                    gripper_position_min=gripper_position_min,
+                    gripper_position_max=gripper_position_max,
                 )
                 last_command = action[:JOINT_COUNT].copy()
                 gripper_state = float(action[JOINT_COUNT])
