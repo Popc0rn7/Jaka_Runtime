@@ -129,7 +129,7 @@ def main(cfg: DictConfig):
         print("Collection interrupted.")
     finally:
         if collector is not None:
-            if collector.dataset.has_pending_frames():
+            if collector.has_pending_frames():
                 collector.discard_episode()
             collector.finalize()
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-import shutil
 from typing import Any
 
 import numpy as np
@@ -75,9 +74,6 @@ class LeRobotDataCollector:
             image_writer_threads=4 if streaming_encoding and self.camera_shapes else 0,
             batch_encoding_size=1,
         )
-        # Existing teleop cleanup calls this method on ``dataset`` directly.
-        # v0.3.3 exposes the same state as ``episode_buffer['size']`` instead.
-        self.dataset.has_pending_frames = self.has_pending_frames
 
     def record_step(
         self,
@@ -126,12 +122,7 @@ class LeRobotDataCollector:
         """Discard frames and temporary images from the current episode."""
         self._ensure_open()
         self.dataset._wait_image_writer()
-        episode_index = self.dataset.episode_buffer["episode_index"]
         self.dataset.clear_episode_buffer()
-        for camera_name in self.camera_shapes:
-            image_dir = self.root / "images" / f"observation.images.{camera_name}" / f"episode_{episode_index:06d}"
-            if image_dir.is_dir():
-                shutil.rmtree(image_dir)
 
     def finalize(self) -> None:
         """Flush LeRobot's asynchronous image writer after the final episode."""
