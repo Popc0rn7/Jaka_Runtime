@@ -1,0 +1,14 @@
+from pathlib import Path
+
+from hydra import compose, initialize_config_dir
+
+
+def test_config_composes_hardware_sections() -> None:
+    config_dir = Path(__file__).parents[1] / "config"
+    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
+        cfg = compose(config_name="config")
+    assert cfg.jaka_s5.ip == "192.168.2.116"
+    assert cfg.jaka_s5.freq_hz == 30
+    assert cfg.dh_gripper.port == "/dev/ttyUSB0"
+    assert cfg.client.host == "192.168.2.108"
+    assert cfg.safety.max_joint_speed == 3.0

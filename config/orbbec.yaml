@@ -1,0 +1,16 @@
+# Orbbec Gemini 336L color stream via pyorbbecsdk. width/height is the native
+# color profile requested from the SDK; output_width/output_height is the uint8
+# RGB size read() returns — center-cropped to that aspect ratio, then resized.
+orbbec:
+  # Leave empty to select the first connected Orbbec device.
+  serial_number: "" # Empty picks the first camera found.
+  width: 1280
+  height: 720
+  fps: 30
+  # Leave empty to let the SDK choose a compatible profile format.
+  color_format: "" # Empty keeps the device default (MJPG on the 336L).
+  output_width: 640
+  output_height: 480
+  # The wrist camera is physically installed upside down on this robot.
+  rotate_180: true
+  startup_timeout: 3.0

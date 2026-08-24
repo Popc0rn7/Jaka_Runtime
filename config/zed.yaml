@@ -1,0 +1,12 @@
+# ZED 2i UVC/V4L2 RGB source. Width is the complete side-by-side frame;
+# the driver crops the selected eye and returns the configured uint8 RGB size.
+zed:
+  device: "/dev/video8"
+  width: 2560
+  height: 720
+  fps: 30
+  fourcc: ""
+  eye: "left"
+  output_width: 640
+  output_height: 480
+  startup_timeout: 3.0
