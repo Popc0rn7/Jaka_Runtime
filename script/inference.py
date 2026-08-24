@@ -9,7 +9,6 @@ robot or gripper.  All connection, observation, and control settings live in
 from __future__ import annotations
 
 import argparse
-from collections import deque
 import os
 import queue
 import sys
@@ -32,7 +31,6 @@ from src.policy_client import OpenPIPolicyClient
 # actual robot commands are requested.
 JOINT_COUNT = 6
 ACTION_DIM = JOINT_COUNT + 1
-SAFETY_EPSILON = 1e-6
 MOCK = False
 
 
@@ -132,64 +130,45 @@ def set_gripper(gripper: Any, target: float) -> None:
 
 def validate_actions(
     actions: np.ndarray, current_joints: np.ndarray, cfg: DictConfig, *, fps: int
-) -> None:
-    """Reject out-of-range targets or abrupt joint changes before execution."""
+) -> np.ndarray:
+    """Clip policy targets to the configured joint and gripper safety envelope."""
+    safe_actions = np.asarray(actions, dtype=np.float32).copy()
+    if safe_actions.ndim != 2 or safe_actions.shape[1] != ACTION_DIM:
+        raise ValueError(
+            f"Policy actions must have shape (action_horizon, {ACTION_DIM}), "
+            f"got {safe_actions.shape}"
+        )
+    if not np.isfinite(safe_actions).all():
+        raise ValueError("Policy actions contain NaN or infinity")
+    safe_actions[:, JOINT_COUNT] = np.clip(safe_actions[:, JOINT_COUNT], 0.0, 1.0)
     joint_min = np.asarray(cfg.safety.joint_min, dtype=np.float32)
     joint_max = np.asarray(cfg.safety.joint_max, dtype=np.float32)
     if joint_min.shape != (JOINT_COUNT,) or joint_max.shape != (JOINT_COUNT,):
-        raise ValueError("safety.joint_min and safety.joint_max must each have 6 values")
+        raise ValueError(
+            "safety.joint_min and safety.joint_max must each have 6 values"
+        )
     if np.any(joint_min > joint_max):
         raise ValueError("Each safety.joint_min value must not exceed joint_max")
-
-    joints = actions[:, :JOINT_COUNT]
-    out_of_range = (joints < joint_min - SAFETY_EPSILON) | (
-        joints > joint_max + SAFETY_EPSILON
-    )
-    if np.any(out_of_range):
-        action_index, joint_index = np.argwhere(out_of_range)[0]
-        raise ValueError(
-            f"Policy action {action_index} joint_{joint_index}={joints[action_index, joint_index]:.4f} "
-            f"is outside [{joint_min[joint_index]:.4f}, {joint_max[joint_index]:.4f}]"
-        )
-
-    gripper_targets = actions[:, JOINT_COUNT]
-    gripper_out_of_range = (gripper_targets < -SAFETY_EPSILON) | (
-        gripper_targets > 1.0 + SAFETY_EPSILON
-    )
-    if np.any(gripper_out_of_range):
-        action_index = int(np.flatnonzero(
-            gripper_out_of_range
-        )[0])
-        raise ValueError(
-            f"Policy action {action_index} gripper target "
-            f"{gripper_targets[action_index]:.4f} is outside [0, 1]"
-        )
 
     max_step = float(cfg.safety.max_joint_step)
     if max_step <= 0:
         raise ValueError("safety.max_joint_step must be positive")
-    previous = np.vstack((np.asarray(current_joints[:JOINT_COUNT]), joints[:-1]))
-    deltas = np.abs(joints - previous)
-    step_too_large = deltas > max_step + SAFETY_EPSILON
-    if np.any(step_too_large):
-        action_index, joint_index = np.argwhere(step_too_large)[0]
-        raise ValueError(
-            f"Policy action {action_index} changes joint_{joint_index} by "
-            f"{deltas[action_index, joint_index]:.4f} rad; maximum is {max_step:.4f} rad"
-        )
-
     max_speed = float(cfg.safety.max_joint_speed)
     if max_speed <= 0:
         raise ValueError("safety.max_joint_speed must be positive")
-    speeds = deltas * fps
-    speed_too_high = speeds > max_speed + SAFETY_EPSILON
-    if np.any(speed_too_high):
-        action_index, joint_index = np.argwhere(speed_too_high)[0]
-        raise ValueError(
-            f"Policy action {action_index} commands joint_{joint_index} at "
-            f"{speeds[action_index, joint_index]:.4f} rad/s; maximum is "
-            f"{max_speed:.4f} rad/s"
-        )
+    if fps <= 0:
+        raise ValueError("fps must be positive")
+
+    max_delta = min(max_step, max_speed / fps)
+    previous = np.asarray(current_joints[:JOINT_COUNT], dtype=np.float32)
+    if previous.shape != (JOINT_COUNT,) or not np.isfinite(previous).all():
+        raise ValueError("Current joint feedback must contain 6 finite values")
+    previous = np.clip(previous, joint_min, joint_max)
+    for target in safe_actions[:, :JOINT_COUNT]:
+        target[:] = np.clip(target, joint_min, joint_max)
+        target[:] = np.clip(target, previous - max_delta, previous + max_delta)
+        previous = target
+    return safe_actions
 
 
 def execute_action(
@@ -211,15 +190,24 @@ def execute_action(
     set_gripper(gripper, gripper_target)
 
 
+def ramp_to_policy_target(
+    action: np.ndarray,
+    arm: JakaS5 | None,
+    gripper: Any | None,
+    *,
+    mock: bool,
+    ramp_steps: int,
+) -> None:
+    """Move safely from the current pose to the first policy target."""
+    if ramp_steps <= 0:
+        raise ValueError("policy.ramp_steps must be positive")
+    execute_action(action, arm, gripper, mock=mock, ramp_steps=ramp_steps)
+
+
 @hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
 def main(cfg: DictConfig) -> None:
     fps = int(cfg.robot.freq_hz)
-    if fps <= 0:
-        raise ValueError(f"robot.freq_hz must be positive, got {fps}")
-    chunk_size = int(cfg.policy.actions_per_inference)
-    refill_at = int(cfg.policy.refill_at_actions)
-    if chunk_size <= 0 or not 0 <= refill_at < chunk_size:
-        raise ValueError("policy requires 0 <= refill_at_actions < actions_per_inference")
+    ramp_steps = int(cfg.policy.ramp_steps)
 
     agent_camera = wrist_camera = arm = gripper = None
     policy = OpenPIPolicyClient(
@@ -246,11 +234,52 @@ def main(cfg: DictConfig) -> None:
 
         policy.reset()
         worker.start()
-        print("Inference started. Press Ctrl-C to stop.", flush=True)
         gripper_state = 0.0
-        action_buffer: deque[np.ndarray] = deque()
         last_command: np.ndarray | None = None
         pending_request = False
+
+        # Do not enter the control loop from an arbitrary startup pose.  First
+        # obtain a policy target from the current observation, then ramp to it.
+        print("Waiting for the first policy target...", flush=True)
+        while True:
+            agent_view = agent_camera.read()
+            wrist = wrist_camera.read()
+            if MOCK:
+                joint_state = np.zeros(JOINT_COUNT, dtype=np.float32)
+            else:
+                assert arm is not None
+                joint_state = np.asarray(arm.get_joint_position(), dtype=np.float32)
+                if joint_state.shape[0] < JOINT_COUNT:
+                    raise RuntimeError("No complete JAKA joint feedback received")
+
+            if not pending_request:
+                observation = make_observation(
+                    policy, cfg, joint_state, gripper_state, agent_view, wrist
+                )
+                pending_request = worker.request(observation)
+
+            result = worker.poll()
+            if result is not None:
+                first_action = validate_actions(result[:1], joint_state, cfg, fps=fps)[
+                    0
+                ]
+                break
+            time.sleep(0.01)
+
+        if not MOCK:
+            input("First policy target is ready. Press Enter to ramp to it... ")
+        ramp_to_policy_target(
+            first_action,
+            arm,
+            gripper,
+            mock=MOCK,
+            ramp_steps=ramp_steps,
+        )
+        last_command = first_action[:JOINT_COUNT].copy()
+        gripper_state = float(first_action[JOINT_COUNT])
+        pending_request = False
+        print("Inference started. Press Ctrl-C to stop.", flush=True)
+
         next_tick = time.perf_counter()
         while True:
             next_tick += 1.0 / fps
@@ -265,27 +294,15 @@ def main(cfg: DictConfig) -> None:
                     raise RuntimeError("No complete JAKA joint feedback received")
 
             result = worker.poll()
+            executed_action = False
             if result is not None:
                 pending_request = False
-                chunk = result[:chunk_size]
-                # The chunk follows any already-buffered commands, not merely
-                # the current feedback pose, so every queue transition is safe.
-                reference = (
-                    action_buffer[-1][:JOINT_COUNT]
-                    if action_buffer
-                    else (last_command if last_command is not None else joint_state)
-                )
-                validate_actions(chunk, reference, cfg, fps=fps)
-                action_buffer.extend(chunk)
-
-            if not pending_request and len(action_buffer) <= refill_at:
-                observation = make_observation(
-                    policy, cfg, joint_state, gripper_state, agent_view, wrist
-                )
-                pending_request = worker.request(observation)
-
-            if action_buffer:
-                action = action_buffer.popleft()
+                action = validate_actions(
+                    result[:1],
+                    last_command if last_command is not None else joint_state,
+                    cfg,
+                    fps=fps,
+                )[0]
                 execute_action(
                     action,
                     arm,
@@ -295,9 +312,22 @@ def main(cfg: DictConfig) -> None:
                 )
                 last_command = action[:JOINT_COUNT].copy()
                 gripper_state = float(action[JOINT_COUNT])
-            elif not MOCK and arm is not None and last_command is not None:
-                # Policy latency exhausted the buffer: hold the last safe pose
-                # instead of issuing an unvalidated or stale command.
+                executed_action = True
+
+            if not pending_request and not executed_action:
+                observation = make_observation(
+                    policy, cfg, joint_state, gripper_state, agent_view, wrist
+                )
+                pending_request = worker.request(observation)
+
+            if (
+                not executed_action
+                and not MOCK
+                and arm is not None
+                and last_command is not None
+            ):
+                # Hold the last safe pose while the one outstanding inference
+                # request is in flight.
                 arm.JointCtrl(last_command.tolist(), step_num=2)
 
             sleep_s = next_tick - time.perf_counter()

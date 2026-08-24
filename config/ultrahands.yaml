@@ -13,23 +13,22 @@ gripper:
 # Robot and remote policy settings used by script/inference.py.  Keep the
 # observation names aligned with the checkpoint training configuration.
 robot:
-  ip: "192.168.2.103"
+  ip: "192.168.2.116"
   freq_hz: 30
+  init_joint: [0.0, 1.57, 1.57, 1.57, -1.57, 2.36]
 
 policy:
-  host: "192.168.2.108"
+  host: "127.0.0.1"
   port: 8000
   action_key: "actions"
   image_size: 224
   task: "Pick an orange and place it into the pink bowl."
-  state_key: "observation/state"
-  agent_view_key: "observation/exterior_image_1_left"
-  wrist_key: "observation/wrist_image"
+  # JAKA OpenPI serving contract: state + exterior and wrist RGB views.
+  state_key: "state"
+  agent_view_key: "image"
+  wrist_key: "wrist_image"
   prompt_key: "prompt"
-  # Keep enough actions to cover policy network latency. A new chunk is
-  # requested when this many commands remain in the control-thread buffer.
-  actions_per_inference: 10
-  refill_at_actions: 8
+  # The first policy target is reached with this slow, controlled move.
   ramp_steps: 250
 
 # Reject an unsafe policy response before it reaches the robot.  Adjust the
@@ -46,7 +45,7 @@ safety:
 # ZED 2i UVC/V4L2 RGB source. Width is the complete side-by-side frame;
 # the driver crops the selected eye and returns the configured uint8 RGB size.
 zed:
-  device: "/dev/video1"
+  device: "/dev/video8"
   width: 2560
   height: 720
   fps: 30
