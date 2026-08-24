@@ -204,9 +204,9 @@ def ramp_to_policy_target(
     execute_action(action, arm, gripper, mock=mock, ramp_steps=ramp_steps)
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
+@hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
-    fps = int(cfg.robot.freq_hz)
+    fps = int(cfg.jaka_s5.freq_hz)
     ramp_steps = int(cfg.policy.ramp_steps)
 
     agent_camera = wrist_camera = arm = gripper = None
@@ -226,11 +226,11 @@ def main(cfg: DictConfig) -> None:
             from pyDHgripper import AG95
             from hardware.jaka_s5 import JakaS5
 
-            arm = JakaS5(ip=str(cfg.robot.ip), freq_hz=fps)
+            arm = JakaS5(ip=str(cfg.jaka_s5.ip), freq_hz=fps)
             arm.start()
-            gripper = AG95(port=str(cfg.gripper.port))
-            gripper.set_force(int(cfg.gripper.force))
-            gripper.set_vel(int(cfg.gripper.velocity))
+            gripper = AG95(port=str(cfg.dh_gripper.port))
+            gripper.set_force(int(cfg.dh_gripper.force))
+            gripper.set_vel(int(cfg.dh_gripper.velocity))
 
         policy.reset()
         worker.start()

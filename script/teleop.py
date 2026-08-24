@@ -42,8 +42,9 @@ def load_static_rgb_image(path: Path, height: int, width: int) -> np.ndarray:
         return np.asarray(image, dtype=np.uint8)
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
+@hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig):
+    fps = int(cfg.jaka_s5.freq_hz)
     agent_shape = (int(cfg.zed.output_height), int(cfg.zed.output_width), 3)  # HWC
     wrist_shape = (
         int(cfg.orbbec.output_height),
@@ -68,13 +69,13 @@ def main(cfg: DictConfig):
         agent_camera.start()
 
         # 启动arm
-        arm = JakaS5(ip="192.168.2.103", freq_hz=30)
+        arm = JakaS5(ip=str(cfg.jaka_s5.ip), freq_hz=fps)
         arm.start()
 
         # 启动gripper
-        gripper = AG95(port=cfg.gripper.port)
-        gripper.set_force(cfg.gripper.force)
-        gripper.set_vel(cfg.gripper.velocity)
+        gripper = AG95(port=str(cfg.dh_gripper.port))
+        gripper.set_force(int(cfg.dh_gripper.force))
+        gripper.set_vel(int(cfg.dh_gripper.velocity))
 
         # 初始化 Ultrahands Client
         ultrahands = UltrahandsClient(**cfg.client)
@@ -87,7 +88,7 @@ def main(cfg: DictConfig):
         collector = LeRobotDataCollector(
             repo_id="local/" + data_name,
             root=data_path,
-            fps=30,
+            fps=fps,
             state_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
             action_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
             task="Pick an orange and place it into the pink bowl.",
@@ -111,6 +112,7 @@ def main(cfg: DictConfig):
                 wrist_camera,
                 collector,
                 display,
+                fps,
             )
             episode_count += 1
             print(f"Episode {episode_count} saved. Ready for the next episode.")
@@ -164,11 +166,12 @@ def teleop(
     wrist_camera: OrbbecCamera,
     collector: LeRobotDataCollector,
     display: DualCameraDisplay,
+    fps: int,
 ):
     print("teleop started, press Y to stop...", end="", flush=True)
 
     # frequency config
-    dt = 1.0 / 30.0
+    dt = 1.0 / fps
     next_tick = time.perf_counter()
 
     # gripper state

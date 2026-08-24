@@ -175,7 +175,7 @@ def replay_episode(
     print(f"Replay of episode {episode_index} done.")
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
+@hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig):
 
     dataset_root = Path(cfg.replay.dataset_root)
@@ -190,12 +190,14 @@ def main(cfg: DictConfig):
     if not actions:
         raise ValueError(f"Episode {episode_index} has no actions to replay")
 
-    arm = JakaS5(ip="192.168.2.121", freq_hz=fps)
-    gripper = AG95(port=cfg.gripper.port)
+    arm = JakaS5(
+        ip=str(cfg.jaka_s5.ip), freq_hz=int(cfg.jaka_s5.freq_hz)
+    )
+    gripper = AG95(port=str(cfg.dh_gripper.port))
     try:
         arm.start()
-        gripper.set_force(cfg.gripper.force)
-        gripper.set_vel(cfg.gripper.velocity)
+        gripper.set_force(int(cfg.dh_gripper.force))
+        gripper.set_vel(int(cfg.dh_gripper.velocity))
 
         replay_episode(arm, gripper, actions, fps, episode_index)
     finally:
