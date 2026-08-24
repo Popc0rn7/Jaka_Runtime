@@ -3,7 +3,7 @@
 The only command-line flag is ``--mock``.  It performs normal camera capture
 and policy requests, but prints predicted actions instead of commanding the
 robot or gripper.  All connection, observation, and control settings live in
-``config/ultrahands.yaml``.
+``config/config.yaml``.
 """
 
 from __future__ import annotations
@@ -347,6 +347,6 @@ def main(cfg: DictConfig) -> None:
 if __name__ == "__main__":
     MOCK = parse_args()
     # Hydra treats argv as configuration overrides.  This script intentionally
-    # exposes no overrides: edit config/ultrahands.yaml for all non-mock setup.
+    # exposes no overrides: edit config/config.yaml for all non-mock setup.
     sys.argv = sys.argv[:1]
     main()

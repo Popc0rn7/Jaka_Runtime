@@ -11,7 +11,7 @@ sys.path.append(root_dir)
 from hardware.orbbec import OrbbecCamera
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
+@hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig):
     camera = OrbbecCamera(**cfg.orbbec)
     camera.start()

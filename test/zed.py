@@ -9,7 +9,7 @@ sys.path.append(root_dir)
 from hardware.zed import ZedCamera
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="ultrahands")
+@hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig):
     # 初始化 Zed Camera
     zed_camera = ZedCamera(**cfg.zed)
