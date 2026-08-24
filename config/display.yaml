@@ -1,8 +1,0 @@
-# Web preview for headless collection hosts. Keep this on localhost and use an
-# SSH tunnel from the operator's workstation; the stream has no authentication.
-display:
-  enabled: true
-  host: "127.0.0.1"
-  port: 8765
-  fps: 30
-  jpeg_quality: 80
