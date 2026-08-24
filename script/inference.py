@@ -111,14 +111,10 @@ def make_observation(
     if state.shape != (ACTION_DIM,) or not np.isfinite(state).all():
         raise ValueError(f"Invalid robot state for policy inference: {state}")
     return {
-        str(cfg.policy.state_key): state,
-        str(cfg.policy.agent_view_key): client.prepare_image(
-            agent_view, int(cfg.policy.image_size)
-        ),
-        str(cfg.policy.wrist_key): client.prepare_image(
-            wrist, int(cfg.policy.image_size)
-        ),
-        str(cfg.policy.prompt_key): str(cfg.policy.task),
+        "state": state,
+        "image": client.prepare_image(agent_view, int(cfg.policy.image_size)),
+        "wrist_image": client.prepare_image(wrist, int(cfg.policy.image_size)),
+        "prompt": str(cfg.policy.task),
     }
 
 
@@ -212,7 +208,7 @@ def ramp_to_policy_target(
 ) -> None:
     """Move safely from the current pose to the first policy target."""
     if ramp_steps <= 0:
-        raise ValueError("policy.ramp_steps must be positive")
+        raise ValueError("safety.initial_ramp_steps must be positive")
     execute_action(
         action,
         arm,
@@ -227,7 +223,7 @@ def ramp_to_policy_target(
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
     fps = int(cfg.jaka_s5.freq_hz)
-    ramp_steps = int(cfg.policy.ramp_steps)
+    ramp_steps = int(cfg.safety.initial_ramp_steps)
     gripper_position_min = int(cfg.dh_gripper.position_min)
     gripper_position_max = int(cfg.dh_gripper.position_max)
 
@@ -235,7 +231,6 @@ def main(cfg: DictConfig) -> None:
     policy = OpenPIPolicyClient(
         host=str(cfg.policy.host),
         port=int(cfg.policy.port),
-        action_key=str(cfg.policy.action_key),
     )
     worker = PolicyWorker(policy)
     try:

@@ -53,3 +53,11 @@ def test_config_keeps_script_settings_in_the_composition_entry_point() -> None:
         "_self_",
     ]
     assert set(config) >= {"policy", "safety", "display", "replay"}
+
+
+def test_policy_config_contains_only_deployment_values() -> None:
+    config_path = Path(__file__).parents[1] / "config" / "config.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    assert set(config["policy"]) == {"host", "port", "task", "image_size"}
+    assert config["safety"]["initial_ramp_steps"] == 250

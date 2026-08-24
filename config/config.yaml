@@ -9,20 +9,14 @@ defaults:
 policy:
   host: "127.0.0.1"
   port: 8000
-  action_key: "actions"
   image_size: 224
   task: "Pick an orange and place it into the pink bowl."
-  # JAKA OpenPI serving contract: state + exterior and wrist RGB views.
-  state_key: "state"
-  agent_view_key: "image"
-  wrist_key: "wrist_image"
-  prompt_key: "prompt"
-  # The first policy target is reached with this slow, controlled move.
-  ramp_steps: 250
 
 # Reject an unsafe policy response before it reaches the robot. Adjust the
 # joint ranges to the limits of the particular robot installation/checkpoint.
 safety:
+  # The first policy target is reached with this slow, controlled move.
+  initial_ramp_steps: 250
   # JAKA S5 mechanical joint ranges, in radians.
   joint_min: [-6.2832, -1.4835, -3.0543, -1.4835, -6.2832, -6.2832]
   joint_max: [6.2832, 4.6251, 3.0543, 4.6251, 6.2832, 6.2832]
