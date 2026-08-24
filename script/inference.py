@@ -32,6 +32,7 @@ from src.gripper import normalized_to_position
 # actual robot commands are requested.
 JOINT_COUNT = 6
 ACTION_DIM = JOINT_COUNT + 1
+INITIAL_RAMP_STEPS = 250
 MOCK = False
 
 
@@ -223,7 +224,7 @@ def ramp_to_policy_target(
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
     fps = int(cfg.jaka_s5.freq_hz)
-    ramp_steps = int(cfg.safety.initial_ramp_steps)
+    ramp_steps = INITIAL_RAMP_STEPS
     gripper_position_min = int(cfg.dh_gripper.position_min)
     gripper_position_max = int(cfg.dh_gripper.position_max)
 

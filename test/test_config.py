@@ -60,4 +60,14 @@ def test_policy_config_contains_only_deployment_values() -> None:
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
     assert set(config["policy"]) == {"host", "port", "task", "image_size"}
-    assert config["safety"]["initial_ramp_steps"] == 250
+
+
+def test_camera_configs_use_an_empty_device_selector_without_serial_numbers() -> None:
+    config_dir = Path(__file__).parents[1] / "config"
+    for camera_name in ("zed", "orbbec"):
+        camera_config = yaml.safe_load(
+            (config_dir / f"{camera_name}.yaml").read_text(encoding="utf-8")
+        )[camera_name]
+
+        assert camera_config["device"] == ""
+        assert "serial_number" not in camera_config

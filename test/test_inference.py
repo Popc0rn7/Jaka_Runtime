@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from script.inference import ramp_to_policy_target, validate_actions
+from script.inference import INITIAL_RAMP_STEPS, ramp_to_policy_target, validate_actions
 
 
 class ValidateActionsTest(unittest.TestCase):
@@ -54,6 +54,9 @@ class ValidateActionsTest(unittest.TestCase):
 
 
 class RampToPolicyTargetTest(unittest.TestCase):
+    def test_uses_a_fixed_initial_ramp_step_count(self) -> None:
+        self.assertEqual(INITIAL_RAMP_STEPS, 250)
+
     def test_sends_first_policy_target_with_configured_ramp_steps(self) -> None:
         class Arm:
             def __init__(self) -> None:

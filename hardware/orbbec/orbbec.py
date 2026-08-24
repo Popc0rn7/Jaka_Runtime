@@ -46,7 +46,7 @@ class OrbbecCamera:
     Otherwise, frames are returned at the native capture resolution.
 
     Args:
-        serial_number: Select a specific camera; empty picks the first one found.
+        device: Select a specific camera; empty picks the first one found.
         width: Requested color width.
         height: Requested color height.
         fps: Requested color frame rate.
@@ -63,7 +63,7 @@ class OrbbecCamera:
 
     def __init__(
         self,
-        serial_number: str = "",
+        device: str = "",
         width: int = 1280,
         height: int = 720,
         fps: int = 30,
@@ -88,7 +88,7 @@ class OrbbecCamera:
         if startup_timeout <= 0:
             raise ValueError("startup_timeout must be positive")
 
-        self.serial_number = serial_number
+        self.device = device
         self.width = width
         self.height = height
         self.fps = fps
@@ -141,13 +141,13 @@ class OrbbecCamera:
                 "other process (such as Orbbec Viewer) holds the camera open — the "
                 "device can only be opened by one process at a time."
             )
-        device = (
-            device_list.get_device_by_serial_number(self.serial_number)
-            if self.serial_number
+        selected_device = (
+            device_list.get_device_by_serial_number(self.device)
+            if self.device
             else device_list.get_device_by_index(0)
         )
 
-        pipeline = Pipeline(device)
+        pipeline = Pipeline(selected_device)
         requested_format = (
             getattr(OBFormat, self.color_format)
             if self.color_format
