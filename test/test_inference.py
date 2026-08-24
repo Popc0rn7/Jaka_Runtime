@@ -3,7 +3,11 @@ import unittest
 
 import numpy as np
 
-from script.inference import INITIAL_RAMP_STEPS, ramp_to_policy_target, validate_actions
+from script.inference import (
+    INITIAL_POSITION_RAMP_STEPS,
+    initialize_robot,
+    validate_actions,
+)
 
 
 class ValidateActionsTest(unittest.TestCase):
@@ -53,11 +57,8 @@ class ValidateActionsTest(unittest.TestCase):
         np.testing.assert_allclose(actions[:, 6], [-0.005, 1.005])
 
 
-class RampToPolicyTargetTest(unittest.TestCase):
-    def test_uses_a_fixed_initial_ramp_step_count(self) -> None:
-        self.assertEqual(INITIAL_RAMP_STEPS, 250)
-
-    def test_sends_first_policy_target_with_configured_ramp_steps(self) -> None:
+class InitializeRobotTest(unittest.TestCase):
+    def test_moves_to_configured_initial_pose_and_closes_gripper(self) -> None:
         class Arm:
             def __init__(self) -> None:
                 self.commands: list[tuple[list[float], int]] = []
@@ -74,19 +75,31 @@ class RampToPolicyTargetTest(unittest.TestCase):
 
         arm = Arm()
         gripper = Gripper()
-        ramp_to_policy_target(
-            np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.25], dtype=np.float32),
+        initialize_robot(
             arm,
             gripper,
+            init_joint=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
             mock=False,
-            ramp_steps=250,
+            ramp_steps=INITIAL_POSITION_RAMP_STEPS,
+            gripper_position_min=100,
+            gripper_position_max=900,
         )
 
         self.assertEqual(len(arm.commands), 1)
         joints, step_num = arm.commands[0]
         np.testing.assert_allclose(joints, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
         self.assertEqual(step_num, 250)
-        self.assertEqual(gripper.positions, [250])
+        self.assertEqual(gripper.positions, [100])
+
+    def test_rejects_an_invalid_initial_pose(self) -> None:
+        with self.assertRaisesRegex(ValueError, "6 joint values"):
+            initialize_robot(
+                arm=None,
+                gripper=None,
+                init_joint=[0.0] * 5,
+                mock=True,
+                ramp_steps=INITIAL_POSITION_RAMP_STEPS,
+            )
 
 
 if __name__ == "__main__":

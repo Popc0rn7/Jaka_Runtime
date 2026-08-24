@@ -32,7 +32,7 @@ from src.gripper import normalized_to_position
 # actual robot commands are requested.
 JOINT_COUNT = 6
 ACTION_DIM = JOINT_COUNT + 1
-INITIAL_RAMP_STEPS = 250
+INITIAL_POSITION_RAMP_STEPS = 250
 MOCK = False
 
 
@@ -197,34 +197,33 @@ def execute_action(
     )
 
 
-def ramp_to_policy_target(
-    action: np.ndarray,
+def initialize_robot(
     arm: JakaS5 | None,
     gripper: Any | None,
     *,
+    init_joint: list[float],
     mock: bool,
     ramp_steps: int,
     gripper_position_min: int = 0,
     gripper_position_max: int = 1000,
 ) -> None:
-    """Move safely from the current pose to the first policy target."""
+    """Move to the configured pose and close the gripper before inference."""
+    if len(init_joint) != JOINT_COUNT:
+        raise ValueError(f"jaka_s5.init_joint must contain {JOINT_COUNT} joint values")
     if ramp_steps <= 0:
-        raise ValueError("safety.initial_ramp_steps must be positive")
-    execute_action(
-        action,
-        arm,
-        gripper,
-        mock=mock,
-        ramp_steps=ramp_steps,
-        gripper_position_min=gripper_position_min,
-        gripper_position_max=gripper_position_max,
-    )
+        raise ValueError("initial position ramp_steps must be positive")
+    if mock:
+        print(f"initial position: joints={init_joint}, gripper=0.0000")
+        return
+    assert arm is not None and gripper is not None
+    arm.JointCtrl(init_joint, step_num=ramp_steps)
+    set_gripper(gripper, 0.0, gripper_position_min, gripper_position_max)
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
     fps = int(cfg.jaka_s5.freq_hz)
-    ramp_steps = INITIAL_RAMP_STEPS
+    init_joint = [float(joint) for joint in cfg.jaka_s5.init_joint]
     gripper_position_min = int(cfg.dh_gripper.position_min)
     gripper_position_max = int(cfg.dh_gripper.position_max)
 
@@ -250,53 +249,21 @@ def main(cfg: DictConfig) -> None:
             gripper.set_force(int(cfg.dh_gripper.force))
             gripper.set_vel(int(cfg.dh_gripper.velocity))
 
+        if not MOCK:
+            input("Press Enter to move to the configured initial position... ")
+        initialize_robot(
+            arm,
+            gripper,
+            init_joint=init_joint,
+            mock=MOCK,
+            ramp_steps=INITIAL_POSITION_RAMP_STEPS,
+            gripper_position_min=gripper_position_min,
+            gripper_position_max=gripper_position_max,
+        )
         policy.reset()
         worker.start()
         gripper_state = 0.0
         last_command: np.ndarray | None = None
-        pending_request = False
-
-        # Do not enter the control loop from an arbitrary startup pose.  First
-        # obtain a policy target from the current observation, then ramp to it.
-        print("Waiting for the first policy target...", flush=True)
-        while True:
-            agent_view = agent_camera.read()
-            wrist = wrist_camera.read()
-            if MOCK:
-                joint_state = np.zeros(JOINT_COUNT, dtype=np.float32)
-            else:
-                assert arm is not None
-                joint_state = np.asarray(arm.get_joint_position(), dtype=np.float32)
-                if joint_state.shape[0] < JOINT_COUNT:
-                    raise RuntimeError("No complete JAKA joint feedback received")
-
-            if not pending_request:
-                observation = make_observation(
-                    policy, cfg, joint_state, gripper_state, agent_view, wrist
-                )
-                pending_request = worker.request(observation)
-
-            result = worker.poll()
-            if result is not None:
-                first_action = validate_actions(result[:1], joint_state, cfg, fps=fps)[
-                    0
-                ]
-                break
-            time.sleep(0.01)
-
-        if not MOCK:
-            input("First policy target is ready. Press Enter to ramp to it... ")
-        ramp_to_policy_target(
-            first_action,
-            arm,
-            gripper,
-            mock=MOCK,
-            ramp_steps=ramp_steps,
-            gripper_position_min=gripper_position_min,
-            gripper_position_max=gripper_position_max,
-        )
-        last_command = first_action[:JOINT_COUNT].copy()
-        gripper_state = float(first_action[JOINT_COUNT])
         pending_request = False
         print("Inference started. Press Ctrl-C to stop.", flush=True)
 
