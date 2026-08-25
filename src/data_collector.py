@@ -8,11 +8,38 @@ official LeRobot v2.1 format while remaining compatible with NumPy < 2.
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from types import MethodType
 
 import numpy as np
+
+
+def _encode_episode_videos_h264(
+    dataset: Any,
+    episode_index: int,
+    *,
+    encode_video_frames: Any,
+    write_info: Any,
+) -> None:
+    """Encode one episode's camera frames as H.264 MP4 files."""
+    for key in dataset.meta.video_keys:
+        video_path = dataset.root / dataset.meta.get_video_file_path(episode_index, key)
+        if video_path.is_file():
+            continue
+        image_dir = dataset._get_image_file_path(
+            episode_index=episode_index,
+            image_key=key,
+            frame_index=0,
+        ).parent
+        encode_video_frames(image_dir, video_path, dataset.fps, vcodec="h264", overwrite=True)
+        shutil.rmtree(image_dir)
+
+    if dataset.meta.video_keys and episode_index == 0:
+        dataset.meta.update_video_info()
+        write_info(dataset.meta.info, dataset.meta.root)
 
 
 class LeRobotDataCollector:
@@ -53,6 +80,8 @@ class LeRobotDataCollector:
         del encoder_queue_maxsize
         try:
             from lerobot.datasets.lerobot_dataset import LeRobotDataset
+            from lerobot.datasets.utils import write_info
+            from lerobot.datasets.video_utils import encode_video_frames
         except ImportError as exc:
             raise RuntimeError(
                 "LeRobot v2.1 dataset dependencies are unavailable. Run `uv sync`."
@@ -73,6 +102,15 @@ class LeRobotDataCollector:
             use_videos=bool(self.camera_shapes),
             image_writer_threads=4 if streaming_encoding and self.camera_shapes else 0,
             batch_encoding_size=1,
+        )
+        self.dataset.encode_episode_videos = MethodType(
+            lambda dataset, episode_index: _encode_episode_videos_h264(
+                dataset,
+                episode_index,
+                encode_video_frames=encode_video_frames,
+                write_info=write_info,
+            ),
+            self.dataset,
         )
 
     def record_step(

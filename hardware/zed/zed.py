@@ -29,7 +29,7 @@ class ZedCamera:
 
     def __init__(
         self,
-        device: str = "/dev/video0",
+        device: str | None = None,
         width: int = 1344,
         height: int = 376,
         fps: int = 30,
@@ -53,6 +53,9 @@ class ZedCamera:
             raise ValueError("fourcc must be empty or exactly four characters")
         if startup_timeout <= 0:
             raise ValueError("startup_timeout must be positive")
+
+        if device is not None and not device.strip():
+            device = None
 
         self.device = device
         self.width = width
@@ -82,6 +85,8 @@ class ZedCamera:
             if self._thread is not None and self._thread.is_alive():
                 return
             self.stop()
+        if self.device is None:
+            self.device = self.discover_device()
         if not Path(self.device).exists():
             raise FileNotFoundError(
                 f"V4L2 device not found: {self.device}. Run `v4l2-ctl --list-devices`."
@@ -135,8 +140,90 @@ class ZedCamera:
             has_frame = self._latest_frame is not None
         if worker_error is not None or not has_frame:
             self.stop()
-            detail = str(worker_error) if worker_error is not None else "no frame received"
+            detail = (
+                str(worker_error) if worker_error is not None else "no frame received"
+            )
             raise RuntimeError(f"Could not start camera {self.device}: {detail}")
+
+    @classmethod
+    def discover_device(
+        cls,
+        *,
+        video_root: Path = Path("/dev"),
+        sysfs_root: Path = Path("/sys/class/video4linux"),
+    ) -> str:
+        """Return the first detectable ZED V4L2 node.
+
+        ZED cameras publish a V4L2 ``name`` containing ``ZED``.  The V4L2
+        sysfs entry links to its USB interface, whose parent device exposes
+        Stereolabs' USB vendor ID (``2b03``).  Matching nodes are sorted by
+        their ``videoN`` number for deterministic selection.
+        """
+        candidates: list[Path] = []
+        nodes = sorted(
+            sysfs_root.glob("video*"),
+            key=lambda path: (
+                not path.name.removeprefix("video").isdigit(),
+                (
+                    int(path.name.removeprefix("video"))
+                    if path.name.removeprefix("video").isdigit()
+                    else path.name
+                ),
+            ),
+        )
+        for node in nodes:
+            name_path = node / "name"
+            device_path = node / "device"
+            if not name_path.is_file() or not device_path.exists():
+                continue
+            name = name_path.read_text().strip()
+            if "zed" not in name.lower():
+                continue
+            usb_device = device_path.resolve()
+            if cls._read_usb_property(usb_device, "idVendor") != "2b03":
+                continue
+            video_device = video_root / node.name
+            if not video_device.exists():
+                continue
+            candidates.append(video_device)
+
+        if candidates:
+            return str(candidates[0])
+
+        available = cls._describe_zed_devices(video_root, sysfs_root)
+        raise RuntimeError(
+            "No ZED camera found through V4L2. "
+            f"Available ZED V4L2 devices: {available}."
+        )
+
+    @staticmethod
+    def _read_usb_property(device: Path, property_name: str) -> str | None:
+        """Read a USB attribute from a V4L2 interface or one of its parents."""
+        for parent in (device, *device.parents):
+            value_path = parent / property_name
+            if value_path.is_file():
+                value = value_path.read_text().strip()
+                if value:
+                    return value
+        return None
+
+    @classmethod
+    def _describe_zed_devices(cls, video_root: Path, sysfs_root: Path) -> str:
+        """Format detectable ZED nodes for discovery error messages."""
+        found: list[str] = []
+        for node in sorted(sysfs_root.glob("video*")):
+            name_path = node / "name"
+            device_path = node / "device"
+            if not name_path.is_file() or not device_path.exists():
+                continue
+            if "zed" not in name_path.read_text().lower():
+                continue
+            usb_device = device_path.resolve()
+            if cls._read_usb_property(usb_device, "idVendor") != "2b03":
+                continue
+            device = video_root / node.name
+            found.append(str(device))
+        return ", ".join(found) if found else "none"
 
     def read(self) -> np.ndarray:
         """Immediately return the newest uint8 RGB HWC frame in memory."""
@@ -147,7 +234,9 @@ class ZedCamera:
             frame_rgb = self._latest_frame
             worker_error = self._worker_error
         if worker_error is not None:
-            raise RuntimeError(f"Camera capture stopped: {worker_error}") from worker_error
+            raise RuntimeError(
+                f"Camera capture stopped: {worker_error}"
+            ) from worker_error
         if frame_rgb is None:
             raise RuntimeError("No camera frame is available")
         # The worker replaces this array reference for every frame and never

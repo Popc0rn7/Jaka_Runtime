@@ -39,11 +39,17 @@ def read_episode_rows(dataset_root: Path) -> list[dict]:
     """Read episode metadata from either supported LeRobot on-disk layout."""
     v21_path = dataset_root / "meta" / "episodes.jsonl"
     if v21_path.is_file():
-        return [json.loads(line) for line in v21_path.read_text(encoding="utf-8").splitlines() if line]
+        return [
+            json.loads(line)
+            for line in v21_path.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
 
     episode_files = sorted((dataset_root / "meta" / "episodes").rglob("*.parquet"))
     if not episode_files:
-        raise FileNotFoundError(f"No LeRobot episode metadata found under {dataset_root / 'meta'}")
+        raise FileNotFoundError(
+            f"No LeRobot episode metadata found under {dataset_root / 'meta'}"
+        )
 
     rows: list[dict] = []
     for path in episode_files:
@@ -78,7 +84,12 @@ def load_episode(
     episode = matches[0]
 
     if info.get("codebase_version") == "v2.1":
-        data_file = dataset_root / "data" / f"chunk-{episode_index // info['chunks_size']:03d}" / f"episode_{episode_index:06d}.parquet"
+        data_file = (
+            dataset_root
+            / "data"
+            / f"chunk-{episode_index // info['chunks_size']:03d}"
+            / f"episode_{episode_index:06d}.parquet"
+        )
     else:
         data_file = dataset_root / info["data_path"].format(
             chunk_index=episode["data/chunk_index"],
@@ -121,11 +132,6 @@ def to_gripper_position(
         ) from error
 
 
-def wait_for_operator(message: str) -> None:
-    """Create an explicit, repeatable safety boundary before robot motion."""
-    input(f"{message}\nPress Enter when the workspace is clear... ")
-
-
 def ramp_to_episode_start(
     arm: JakaS5,
     gripper: AG95,
@@ -134,19 +140,13 @@ def ramp_to_episode_start(
     gripper_position_scale: int = 1000,
 ) -> int:
     """Slowly align the robot with an episode's initial command."""
-    wait_for_operator("Ready to ramp to this episode's first pose.")
-    print(
-        f"Ramping starts in {START_DELAY_SECONDS:.0f} seconds. "
-        "Keep the emergency stop accessible.",
-        flush=True,
-    )
+    input("Ready to ramp to this episode's first pose and replay.")
     time.sleep(START_DELAY_SECONDS)
 
     gripper_target = to_gripper_position(first_action, 0, gripper_position_scale)
     arm.JointCtrl(first_action[:JOINT_COUNT], step_num=round(RAMP_SECONDS * fps))
     gripper.set_pos(gripper_target)
     time.sleep(RAMP_SECONDS)
-    print("Ramp complete.")
     return gripper_target
 
 
@@ -166,11 +166,7 @@ def replay_episode(
         fps,
         gripper_position_scale,
     )
-    wait_for_operator(
-        f"Episode {episode_index} is in its start pose and ready to replay."
-    )
-    print(f"Replay starts in {START_DELAY_SECONDS:.0f} seconds...", flush=True)
-    time.sleep(START_DELAY_SECONDS)
+    print(f"Replay starts...", flush=True)
 
     dt = 1.0 / fps
     next_tick = time.perf_counter()
@@ -207,9 +203,7 @@ def main(cfg: DictConfig):
     if not actions:
         raise ValueError(f"Episode {episode_index} has no actions to replay")
 
-    arm = JakaS5(
-        ip=str(cfg.jaka_s5.ip), freq_hz=int(cfg.jaka_s5.freq_hz)
-    )
+    arm = JakaS5(ip=str(cfg.jaka_s5.ip), freq_hz=int(cfg.jaka_s5.freq_hz))
     gripper = AG95(port=str(cfg.dh_gripper.port))
     try:
         arm.start()

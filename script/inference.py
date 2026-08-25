@@ -14,7 +14,7 @@ import queue
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 import hydra
 import numpy as np
@@ -25,6 +25,7 @@ sys.path.append(root_dir)
 
 from hardware.orbbec import OrbbecCamera
 from hardware.zed import ZedCamera
+from hardware.jaka_s5 import JakaS5
 from src.policy_client import OpenPIPolicyClient
 from src.gripper import normalized_to_position
 
@@ -36,11 +37,22 @@ INITIAL_POSITION_RAMP_STEPS = 250
 MOCK = False
 
 
+def print_status(message: str) -> None:
+    """Emit an inference progress message immediately."""
+    print(message, flush=True)
+
+
 class PolicyWorker:
     """Own the policy WebSocket in a background thread, one request at a time."""
 
-    def __init__(self, policy: OpenPIPolicyClient) -> None:
+    def __init__(
+        self,
+        policy: OpenPIPolicyClient,
+        *,
+        status: Callable[[str], None] = print_status,
+    ) -> None:
         self._policy = policy
+        self._status = status
         self._requests: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
         self._results: queue.Queue[np.ndarray] = queue.Queue(maxsize=1)
         self._error: BaseException | None = None
@@ -56,6 +68,7 @@ class PolicyWorker:
             self._requests.put_nowait(observation)
         except queue.Full:
             return False
+        self._status("Policy inference request queued.")
         return True
 
     def poll(self) -> np.ndarray | None:
@@ -73,7 +86,20 @@ class PolicyWorker:
         while not self._stopped.is_set():
             try:
                 observation = self._requests.get(timeout=0.1)
-                actions = self._policy.infer(observation, action_dim=ACTION_DIM)
+                self._status("Policy inference request started.")
+                started_at = time.perf_counter()
+                try:
+                    actions = self._policy.infer(observation, action_dim=ACTION_DIM)
+                except BaseException:
+                    self._status(
+                        "Policy inference failed after "
+                        f"{time.perf_counter() - started_at:.2f}s."
+                    )
+                    raise
+                self._status(
+                    "Policy inference completed in "
+                    f"{time.perf_counter() - started_at:.2f}s."
+                )
                 while not self._stopped.is_set():
                     try:
                         self._results.put(actions, timeout=0.1)
@@ -244,7 +270,7 @@ def main(cfg: DictConfig) -> None:
             gripper.set_vel(int(cfg.dh_gripper.velocity))
 
         if not MOCK:
-            input("Press Enter to move to the configured initial position... ")
+            input("Press Enter to move to initial position and inference... ")
         initialize_robot(
             arm,
             gripper,

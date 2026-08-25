@@ -6,6 +6,10 @@ defaults:
   - orbbec
   - _self_
 
+data_collect:
+  name: "jaka_s5_pick_place"
+  prompt: "Pick an orange and place it into the pink bowl."
+
 policy:
   host: "127.0.0.1"
   port: 8000
@@ -27,5 +31,5 @@ display:
   jpeg_quality: 80
 
 replay:
-  dataset_root: "data/demo/20260820_153529"
-  episode: 0
+  dataset_root: "data/jaka_s5_pick_place/20260825_022747"
+  episode: 10

@@ -1,12 +1,9 @@
 import os
-import signal
 import sys
 import time
 import hydra
-import numpy as np
 from pathlib import Path
 from omegaconf import DictConfig
-from PIL import Image
 from pyDHgripper import AG95
 
 # import modules from the root directory
@@ -19,28 +16,6 @@ from hardware.orbbec import OrbbecCamera
 from src.data_collector import LeRobotDataCollector
 from src.gripper import normalized_to_position
 from src.teleop_display import DualCameraDisplay
-
-
-def load_static_rgb_image(path: Path, height: int, width: int) -> np.ndarray:
-    """Center-crop to the target aspect ratio, then resize to camera shape."""
-    if not path.is_file():
-        raise FileNotFoundError(f"Static camera image not found: {path}")
-
-    with Image.open(path) as image:
-        image = image.convert("RGB")
-        source_width, source_height = image.size
-        target_ratio = width / height
-        source_ratio = source_width / source_height
-        if source_ratio > target_ratio:
-            crop_width = round(source_height * target_ratio)
-            left = (source_width - crop_width) // 2
-            image = image.crop((left, 0, left + crop_width, source_height))
-        elif source_ratio < target_ratio:
-            crop_height = round(source_width / target_ratio)
-            top = (source_height - crop_height) // 2
-            image = image.crop((0, top, source_width, top + crop_height))
-        image = image.resize((width, height), Image.Resampling.LANCZOS)
-        return np.asarray(image, dtype=np.uint8)
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
@@ -83,7 +58,7 @@ def main(cfg: DictConfig):
         ultrahands.start()
 
         # 初始化数据采集器。一个运行目录可保存多个 teleop episode。
-        data_name = "jaka_s5_pick_place"
+        data_name = cfg.data_collect.name
         timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
         data_path = Path(root_dir) / "data" / data_name / timestamp
         collector = LeRobotDataCollector(
@@ -92,8 +67,8 @@ def main(cfg: DictConfig):
             fps=fps,
             state_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
             action_names=[*(f"joint_{i}.pos" for i in range(6)), "gripper.target_pos"],
-            task="Pick an orange and place it into the pink bowl.",
-            camera_shapes={"wrist": wrist_shape, "agent_view": agent_shape},
+            task=cfg.data_collect.prompt,
+            camera_shapes={"wrist_view": wrist_shape, "agent_view": agent_shape},
         )
 
         display = DualCameraDisplay(**cfg.display)
@@ -152,11 +127,11 @@ def ramp_to_ultrahands(arm: JakaS5, ultrahands: UltrahandsClient):
         last_x = x_pressed
         time.sleep(0.01)
 
-    time.sleep(1.0)
     joint_pos = ultrahands.input_report.angles
     if joint_pos is None or len(joint_pos) < JOINT_COUNT:
         raise RuntimeError("No Ultrahands joint angles received for ramping")
     arm.JointCtrl(joint_pos[:JOINT_COUNT], step_num=250)  # 2 seconds
+    time.sleep(2.0)
     print("done.")
 
 
@@ -225,12 +200,9 @@ def teleop(
                 *angles[:JOINT_COUNT],
                 gripper_target,
             ],
-            images={"wrist": wrist_image, "agent_view": agent_view_image},
+            images={"wrist_view": wrist_image, "agent_view": agent_view_image},
         )
-        # Publish the same frames sent to the data collector, so preview and
-        # recorded observations refer to the exact same teleop tick. This is a
-        # no-op when display.enabled is false.
-        display.publish({"wrist": wrist_image, "agent_view": agent_view_image})
+        display.publish({"wrist_view": wrist_image, "agent_view": agent_view_image})
 
         # check stop condition
         y_pressed = bool(report.stick_l1_horizontal)
